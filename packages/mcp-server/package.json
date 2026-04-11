@@ -10,7 +10,6 @@
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.0.0-alpha.2",
-    "@parallel/workflow-core": "workspace:*",
     "zod": "^4.1.8"
   }
 }

@@ -1,0 +1,7 @@
+[workspace]
+members = [
+  "apps/desktop/src-tauri",
+  "crates/workflow-core-rs",
+  "crates/projectctl-rs",
+]
+resolver = "2"

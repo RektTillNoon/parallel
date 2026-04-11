@@ -8,10 +8,7 @@
     "projectctl": "dist/index.js"
   },
   "scripts": {
-    "build": "tsup --config tsup.config.ts",
+    "build": "cargo build --manifest-path ../../crates/projectctl-rs/Cargo.toml && tsup --config tsup.config.ts",
     "test": "node -e \"process.exit(0)\""
-  },
-  "dependencies": {
-    "@parallel/workflow-core": "workspace:*"
   }
 }

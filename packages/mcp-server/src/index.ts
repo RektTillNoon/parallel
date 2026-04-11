@@ -1,30 +1,60 @@
 import process from 'node:process';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
 
 import { McpServer, StdioServerTransport } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
-
-import {
-  addBlocker,
-  appendActivityEvent,
-  clearBlocker,
-  completeStep,
-  ensureSession,
-  getProject,
-  listProjects,
-  proposeDecision,
-  refreshHandoff,
-  startStep,
-  syncPlan,
-  updateRuntime,
-} from '@parallel/workflow-core';
 
 const indexDbPath = process.env.PROJECT_WORKFLOW_INDEX_DB;
 const watchedRoots = (process.env.PROJECT_WORKFLOW_WATCH_ROOTS ?? '')
   .split(process.platform === 'win32' ? ';' : ':')
   .map((root) => root.trim())
   .filter(Boolean);
+const extension = process.platform === 'win32' ? '.exe' : '';
+const binaryCandidates = [
+  process.env.PARALLEL_PROJECTCTL_BINARY,
+  path.resolve(__dirname, `../../../target/release/projectctl${extension}`),
+  path.resolve(__dirname, `../../../target/debug/projectctl${extension}`),
+].filter((value): value is string => Boolean(value));
 
 const sourceSchema = z.enum(['mcp', 'agent', 'cli', 'desktop', 'human', 'system']);
+
+function runProjectctl(args: string[]) {
+  const resolvedBinary = binaryCandidates.find((candidate) => fs.existsSync(candidate));
+  if (!resolvedBinary) {
+    throw new Error(
+      'Failed to launch Rust projectctl: native binary not found. Build the workspace first or set PARALLEL_PROJECTCTL_BINARY.',
+    );
+  }
+
+  const result = spawnSync(resolvedBinary, [...args, '--json'], {
+    encoding: 'utf8',
+    env: process.env,
+  });
+
+  if (result.error) {
+    throw new Error(`Failed to launch Rust projectctl: ${result.error.message}`);
+  }
+
+  if (result.status !== 0) {
+    const message = result.stderr.trim() || result.stdout.trim() || `projectctl exited ${result.status}`;
+    throw new Error(message);
+  }
+
+  return JSON.parse(result.stdout);
+}
+
+function textResponse(payload: unknown) {
+  return {
+    content: [
+      {
+        type: 'text' as const,
+        text: JSON.stringify(payload, null, 2),
+      },
+    ],
+  };
+}
 
 const server = new McpServer(
   {
@@ -32,9 +62,7 @@ const server = new McpServer(
     version: '0.1.0',
   },
   {
-    capabilities: {
-      logging: {},
-    },
+    capabilities: { logging: {} },
     instructions:
       'This server exposes agent-safe project workflow operations. Parallel owns the canonical plan, sessions, and execution history.',
   },
@@ -49,17 +77,7 @@ server.registerTool(
       roots: z.array(z.string()).optional(),
     }),
   },
-  async ({ roots }) => {
-    const projects = await listProjects(roots && roots.length > 0 ? roots : watchedRoots, indexDbPath);
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: JSON.stringify(projects, null, 2),
-        },
-      ],
-    };
-  },
+  async ({ roots }) => textResponse(runProjectctl(['list', ...(roots && roots.length > 0 ? roots : watchedRoots)])),
 );
 
 server.registerTool(
@@ -68,21 +86,9 @@ server.registerTool(
     title: 'Get project',
     description:
       'Return manifest, canonical plan, runtime focus, sessions, recent activity, blockers, pending proposals, and handoff text for a project.',
-    inputSchema: z.object({
-      root: z.string(),
-    }),
+    inputSchema: z.object({ root: z.string() }),
   },
-  async ({ root }) => {
-    const project = await getProject(root);
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: JSON.stringify(project, null, 2),
-        },
-      ],
-    };
-  },
+  async ({ root }) => textResponse(runProjectctl(['show', '--root', root])),
 );
 
 server.registerTool(
@@ -122,20 +128,23 @@ server.registerTool(
       ),
     }),
   },
-  async ({ root, actor, source, sessionId, sessionTitle, phases }) => {
-    const result = await syncPlan({
-      root,
-      actor,
-      source,
-      sessionId,
-      sessionTitle,
-      phases,
-      indexDbPath,
-    });
-    return {
-      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
-    };
-  },
+  async ({ root, actor, source, sessionId, sessionTitle, phases }) =>
+    textResponse(
+      runProjectctl([
+        'plan',
+        'sync',
+        '--root',
+        root,
+        '--actor',
+        actor,
+        '--source',
+        source,
+        ...(sessionId ? ['--session-id', sessionId] : []),
+        ...(sessionTitle ? ['--session-title', sessionTitle] : []),
+        '--plan',
+        JSON.stringify({ phases }),
+      ]),
+    ),
 );
 
 server.registerTool(
@@ -152,20 +161,22 @@ server.registerTool(
       branch: z.string().optional(),
     }),
   },
-  async ({ root, actor, source, sessionId, sessionTitle, branch }) => {
-    const result = await ensureSession({
-      root,
-      actor,
-      source,
-      sessionId,
-      sessionTitle,
-      branch,
-      indexDbPath,
-    });
-    return {
-      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
-    };
-  },
+  async ({ root, actor, source, sessionId, sessionTitle, branch }) =>
+    textResponse(
+      runProjectctl([
+        'session',
+        'ensure',
+        '--root',
+        root,
+        '--actor',
+        actor,
+        '--source',
+        source,
+        ...(sessionId ? ['--session-id', sessionId] : []),
+        ...(sessionTitle ? ['--session-title', sessionTitle] : []),
+        ...(branch ? ['--branch', branch] : []),
+      ]),
+    ),
 );
 
 server.registerTool(
@@ -182,20 +193,23 @@ server.registerTool(
       eventType: z.string().optional(),
     }),
   },
-  async ({ root, actor, source, summary, patch, eventType }) => {
-    const result = await updateRuntime({
-      root,
-      actor,
-      source,
-      patch,
-      summary,
-      eventType,
-      indexDbPath,
-    });
-    return {
-      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
-    };
-  },
+  async ({ root, actor, source, summary, patch, eventType }) =>
+    textResponse(
+      runProjectctl([
+        'runtime',
+        '--root',
+        root,
+        '--actor',
+        actor,
+        '--source',
+        source,
+        '--summary',
+        summary,
+        '--patch',
+        JSON.stringify(patch),
+        ...(eventType ? ['--event-type', eventType] : []),
+      ]),
+    ),
 );
 
 server.registerTool(
@@ -216,27 +230,28 @@ server.registerTool(
       payload: z.record(z.string(), z.unknown()).optional(),
     }),
   },
-  async ({ root, actor, source, sessionId, sessionTitle, type, summary, stepId, subtaskId, payload }) => {
-    const result = await appendActivityEvent(
-      root,
-      {
+  async ({ root, actor, source, sessionId, sessionTitle, type, summary, stepId, subtaskId, payload }) =>
+    textResponse(
+      runProjectctl([
+        'activity',
+        'add',
+        '--root',
+        root,
+        '--actor',
         actor,
+        '--source',
         source,
-        sessionId,
-        sessionTitle,
+        '--type',
         type,
+        '--summary',
         summary,
-        stepId,
-        subtaskId,
-        payload,
-        indexDbPath,
-      },
-      indexDbPath,
-    );
-    return {
-      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
-    };
-  },
+        ...(sessionId ? ['--session-id', sessionId] : []),
+        ...(sessionTitle ? ['--session-title', sessionTitle] : []),
+        ...(stepId ? ['--step-id', stepId] : []),
+        ...(subtaskId ? ['--subtask-id', subtaskId] : []),
+        ...(payload ? ['--payload', JSON.stringify(payload)] : []),
+      ]),
+    ),
 );
 
 server.registerTool(
@@ -254,17 +269,23 @@ server.registerTool(
       branch: z.string().optional(),
     }),
   },
-  async ({ root, stepId, actor, source, sessionId, sessionTitle, branch }) => {
-    const result = await startStep(
-      root,
-      stepId,
-      { actor, source, sessionId, sessionTitle, branch },
-      indexDbPath,
-    );
-    return {
-      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
-    };
-  },
+  async ({ root, stepId, actor, source, sessionId, sessionTitle, branch }) =>
+    textResponse(
+      runProjectctl([
+        'step',
+        'start',
+        stepId,
+        '--root',
+        root,
+        '--actor',
+        actor,
+        '--source',
+        source,
+        ...(sessionId ? ['--session-id', sessionId] : []),
+        ...(sessionTitle ? ['--session-title', sessionTitle] : []),
+        ...(branch ? ['--branch', branch] : []),
+      ]),
+    ),
 );
 
 server.registerTool(
@@ -282,17 +303,23 @@ server.registerTool(
       branch: z.string().optional(),
     }),
   },
-  async ({ root, stepId, actor, source, sessionId, sessionTitle, branch }) => {
-    const result = await completeStep(
-      root,
-      stepId,
-      { actor, source, sessionId, sessionTitle, branch },
-      indexDbPath,
-    );
-    return {
-      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
-    };
-  },
+  async ({ root, stepId, actor, source, sessionId, sessionTitle, branch }) =>
+    textResponse(
+      runProjectctl([
+        'step',
+        'done',
+        stepId,
+        '--root',
+        root,
+        '--actor',
+        actor,
+        '--source',
+        source,
+        ...(sessionId ? ['--session-id', sessionId] : []),
+        ...(sessionTitle ? ['--session-title', sessionTitle] : []),
+        ...(branch ? ['--branch', branch] : []),
+      ]),
+    ),
 );
 
 server.registerTool(
@@ -311,24 +338,23 @@ server.registerTool(
       clear: z.boolean().default(false),
     }),
   },
-  async ({ root, actor, source, sessionId, sessionTitle, branch, blocker, clear }) => {
-    const result = clear
-      ? await clearBlocker(
-          root,
-          blocker,
-          { actor, source, sessionId, sessionTitle, branch },
-          indexDbPath,
-        )
-      : await addBlocker(
-          root,
-          blocker ?? 'Unnamed blocker',
-          { actor, source, sessionId, sessionTitle, branch },
-          indexDbPath,
-        );
-    return {
-      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
-    };
-  },
+  async ({ root, actor, source, sessionId, sessionTitle, branch, blocker, clear }) =>
+    textResponse(
+      runProjectctl([
+        'blocker',
+        clear ? 'clear' : 'add',
+        ...(blocker ? [blocker] : []),
+        '--root',
+        root,
+        '--actor',
+        actor,
+        '--source',
+        source,
+        ...(sessionId ? ['--session-id', sessionId] : []),
+        ...(sessionTitle ? ['--session-title', sessionTitle] : []),
+        ...(branch ? ['--branch', branch] : []),
+      ]),
+    ),
 );
 
 server.registerTool(
@@ -342,12 +368,8 @@ server.registerTool(
       source: z.enum(['mcp', 'agent']).default('mcp'),
     }),
   },
-  async ({ root, actor, source }) => {
-    const result = await refreshHandoff(root, { actor, source }, indexDbPath);
-    return {
-      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
-    };
-  },
+  async ({ root, actor, source }) =>
+    textResponse(runProjectctl(['handoff', 'refresh', '--root', root, '--actor', actor, '--source', source])),
 );
 
 server.registerTool(
@@ -367,17 +389,29 @@ server.registerTool(
       impact: z.string(),
     }),
   },
-  async ({ root, actor, source, sessionId, sessionTitle, title, context, decision, impact }) => {
-    const result = await proposeDecision(
-      root,
-      { title, context, decision, impact },
-      { actor, source, sessionId, sessionTitle },
-      indexDbPath,
-    );
-    return {
-      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
-    };
-  },
+  async ({ root, actor, source, sessionId, sessionTitle, title, context, decision, impact }) =>
+    textResponse(
+      runProjectctl([
+        'decision',
+        'propose',
+        '--root',
+        root,
+        '--actor',
+        actor,
+        '--source',
+        source,
+        ...(sessionId ? ['--session-id', sessionId] : []),
+        ...(sessionTitle ? ['--session-title', sessionTitle] : []),
+        '--title',
+        title,
+        '--context',
+        context,
+        '--decision',
+        decision,
+        '--impact',
+        impact,
+      ]),
+    ),
 );
 
 async function main() {
