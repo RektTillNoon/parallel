@@ -5,7 +5,8 @@ mod bridge;
 use std::{
     env, fs,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::mpsc,
+    sync::{Arc, Mutex},
     thread,
     time::Duration,
 };
@@ -26,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{
     menu::{MenuBuilder, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, State,
+    AppHandle, Emitter, Manager, RunEvent, State,
 };
 use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
@@ -68,6 +69,8 @@ struct AppState {
 
 struct BridgeSupervisor {
     child: Option<CommandChild>,
+    child_pid: Option<u32>,
+    stopping_pid: Option<u32>,
     runtime: BridgeRuntimeSnapshot,
 }
 
@@ -150,6 +153,15 @@ fn joined_watched_roots(settings: &Settings) -> String {
 }
 
 fn emit_bridge_state(app: &AppHandle, state: &AppState, reason: &str) -> Result<(), String> {
+    let payload = bridge_state_payload(state, reason)?;
+    app.emit(
+        BRIDGE_EVENT,
+        payload,
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn bridge_state_payload(state: &AppState, reason: &str) -> Result<BridgeStateEvent, String> {
     let settings = ensure_settings(state)?;
     let runtime = state
         .bridge
@@ -157,15 +169,11 @@ fn emit_bridge_state(app: &AppHandle, state: &AppState, reason: &str) -> Result<
         .map_err(|_| "bridge mutex poisoned".to_string())?
         .runtime
         .clone();
-    app.emit(
-        BRIDGE_EVENT,
-        BridgeStateEvent {
-            reason: reason.to_string(),
-            mcp: settings.mcp,
-            mcp_runtime: runtime,
-        },
-    )
-    .map_err(|error| error.to_string())
+    Ok(BridgeStateEvent {
+        reason: reason.to_string(),
+        mcp: settings.mcp,
+        mcp_runtime: runtime,
+    })
 }
 
 fn update_bridge_runtime(
@@ -184,6 +192,47 @@ fn update_bridge_runtime(
     emit_bridge_state(app, state, reason)
 }
 
+fn wait_for_bridge_shutdown(state: &AppState, timeout: Duration) -> Result<(), String> {
+    let started = std::time::Instant::now();
+    loop {
+        let stopping_pid = state
+            .bridge
+            .lock()
+            .map_err(|_| "bridge mutex poisoned".to_string())?
+            .stopping_pid;
+        if stopping_pid.is_none() {
+            return Ok(());
+        }
+        if started.elapsed() >= timeout {
+            return Err(format!(
+                "Previous Agent Bridge process {:?} did not exit in time",
+                stopping_pid
+            ));
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn register_bridge_child(supervisor: &mut BridgeSupervisor, child: CommandChild, pid: u32, port: u16) {
+    supervisor.child = Some(child);
+    supervisor.child_pid = Some(pid);
+    supervisor.runtime.pid = Some(pid);
+    supervisor.runtime.bound_port = Some(port);
+    supervisor.runtime.started_at = Some(now_iso());
+}
+
+fn handle_terminated_bridge_process(supervisor: &mut BridgeSupervisor, monitored_pid: u32) -> bool {
+    let intentional_stop = supervisor.stopping_pid == Some(monitored_pid);
+    if intentional_stop {
+        supervisor.stopping_pid = None;
+    }
+    if supervisor.child_pid == Some(monitored_pid) {
+        supervisor.child = None;
+        supervisor.child_pid = None;
+    }
+    intentional_stop
+}
+
 fn stop_bridge(app: &AppHandle, state: &AppState, reason: &str) -> Result<(), String> {
     {
         let mut guard = state
@@ -191,6 +240,7 @@ fn stop_bridge(app: &AppHandle, state: &AppState, reason: &str) -> Result<(), St
             .lock()
             .map_err(|_| "bridge mutex poisoned".to_string())?;
         if let Some(child) = guard.child.take() {
+            guard.stopping_pid = guard.child_pid.take();
             let _ = child.kill();
         }
         guard.runtime.status = "stopped".to_string();
@@ -202,24 +252,86 @@ fn stop_bridge(app: &AppHandle, state: &AppState, reason: &str) -> Result<(), St
     emit_bridge_state(app, state, reason)
 }
 
-fn wait_for_bridge_health(port: u16, token: &str) -> Result<(), String> {
+fn probe_bridge_health(port: u16, token: &str, timeout_ms: u64) -> Result<(), String> {
     let client = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_millis(timeout_ms))
+        .timeout(Duration::from_millis(timeout_ms))
+        .no_proxy()
         .build()
         .map_err(|error| error.to_string())?;
     let url = format!("http://127.0.0.1:{port}/health");
 
-    for _ in 0..20 {
-        match client.get(&url).header("Authorization", format!("Bearer {token}")).send() {
-            Ok(response) if response.status().is_success() => return Ok(()),
-            _ => thread::sleep(Duration::from_millis(150)),
+    match client
+        .get(&url)
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+    {
+        Ok(response) if response.status().is_success() => Ok(()),
+        Ok(response) => Err(format!("Agent Bridge health returned {}", response.status())),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn wait_for_bridge_health(port: u16, token: &str, attempts: usize, delay_ms: u64) -> Result<(), String> {
+    let mut last_error = None;
+    for _ in 0..attempts {
+        match probe_bridge_health(port, token, delay_ms.max(250)) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                last_error = Some(error);
+                thread::sleep(Duration::from_millis(delay_ms));
+            }
         }
     }
 
-    Err(format!("Agent Bridge did not become healthy on port {port}"))
+    let detail = last_error.unwrap_or_else(|| "no health probe result".to_string());
+    Err(format!(
+        "Agent Bridge did not become healthy on port {port}. Last probe error: {detail}"
+    ))
+}
+
+fn apply_bridge_health_success(runtime: &mut BridgeRuntimeSnapshot, port: u16) {
+    runtime.status = "running".to_string();
+    runtime.bound_port = Some(port);
+    runtime.last_error = None;
+}
+
+fn reconcile_bridge_runtime_if_healthy(state: &AppState) -> Result<(), String> {
+    let settings = ensure_settings(state)?;
+    if !settings.mcp.enabled {
+        return Ok(());
+    }
+
+    let port = {
+        let guard = state
+            .bridge
+            .lock()
+            .map_err(|_| "bridge mutex poisoned".to_string())?;
+        if guard.runtime.status != "starting" {
+            return Ok(());
+        }
+        guard.runtime.bound_port.unwrap_or(settings.mcp.port)
+    };
+
+    if probe_bridge_health(port, &settings.mcp.token, 250).is_ok() {
+        let mut guard = state
+            .bridge
+            .lock()
+            .map_err(|_| "bridge mutex poisoned".to_string())?;
+        if guard.runtime.status == "starting" {
+            apply_bridge_health_success(&mut guard.runtime, port);
+        }
+    }
+
+    Ok(())
 }
 
 fn start_bridge(app: &AppHandle, state: &AppState) -> Result<(), String> {
+    wait_for_bridge_shutdown(state, Duration::from_secs(2))?;
     let mut settings = ensure_settings(state)?;
+    if !settings.mcp.enabled {
+        return Ok(());
+    }
     if settings.mcp.token.trim().is_empty() {
         settings.mcp.token = generate_token();
     }
@@ -241,10 +353,10 @@ fn start_bridge(app: &AppHandle, state: &AppState) -> Result<(), String> {
         runtime.last_error = None;
     })?;
 
+    let executable = current_projectctl_path()?;
     let sidecar = app
         .shell()
-        .sidecar("projectctl")
-        .map_err(|error| error.to_string())?
+        .command(executable)
         .args(vec![
             "mcp".to_string(),
             "serve-http".to_string(),
@@ -264,30 +376,55 @@ fn start_bridge(app: &AppHandle, state: &AppState) -> Result<(), String> {
             .bridge
             .lock()
             .map_err(|_| "bridge mutex poisoned".to_string())?;
-        guard.child = Some(child);
-        guard.runtime.pid = Some(pid);
-        guard.runtime.bound_port = Some(port);
-        guard.runtime.started_at = Some(now_iso());
+        register_bridge_child(&mut guard, child, pid, port);
     }
 
+    let (startup_tx, startup_rx) = mpsc::sync_channel::<Result<(), String>>(1);
     let monitor_app = app.clone();
     tauri::async_runtime::spawn(async move {
+        let monitored_pid = pid;
+        let mut startup_tx = Some(startup_tx);
         while let Some(event) = rx.recv().await {
             match event {
+                CommandEvent::Stdout(bytes) => {
+                    let message = String::from_utf8_lossy(&bytes).trim().to_string();
+                    if message.starts_with("AGENT_BRIDGE_READY ") {
+                        if let Some(tx) = startup_tx.take() {
+                            let _ = tx.send(Ok(()));
+                        }
+                    }
+                }
                 CommandEvent::Terminated(payload) => {
+                    let terminated_error = format!(
+                        "projectctl exited with code {:?} signal {:?}",
+                        payload.code, payload.signal
+                    );
+                    let intentional_stop = if let Ok(mut guard) = monitor_app.state::<AppState>().bridge.lock() {
+                        handle_terminated_bridge_process(&mut guard, monitored_pid)
+                    } else {
+                        false
+                    };
+                    if intentional_stop {
+                        break;
+                    }
+                    if let Some(tx) = startup_tx.take() {
+                        let _ = tx.send(Err(terminated_error.clone()));
+                    }
                     let _ = update_bridge_runtime(&monitor_app, &monitor_app.state::<AppState>(), "sidecarExited", |runtime| {
                         runtime.status = "error".to_string();
                         runtime.pid = None;
                         runtime.started_at = None;
-                        runtime.last_error = Some(format!(
-                            "projectctl exited with code {:?} signal {:?}",
-                            payload.code, payload.signal
-                        ));
+                        runtime.last_error = Some(terminated_error.clone());
                     });
-                    if let Ok(mut guard) = monitor_app.state::<AppState>().bridge.lock() {
-                        guard.child = None;
-                    }
                     break;
+                }
+                CommandEvent::Error(message) => {
+                    if let Some(tx) = startup_tx.take() {
+                        let _ = tx.send(Err(message.clone()));
+                    }
+                    let _ = update_bridge_runtime(&monitor_app, &monitor_app.state::<AppState>(), "startFailed", |runtime| {
+                        runtime.last_error = Some(message.clone());
+                    });
                 }
                 CommandEvent::Stderr(bytes) => {
                     let message = String::from_utf8_lossy(&bytes).trim().to_string();
@@ -302,20 +439,39 @@ fn start_bridge(app: &AppHandle, state: &AppState) -> Result<(), String> {
         }
     });
 
-    if let Err(error) = wait_for_bridge_health(port, &settings.mcp.token) {
+    let startup_result = startup_rx.recv_timeout(Duration::from_secs(5));
+    let readiness_result = match startup_result {
+        Ok(Ok(())) => wait_for_bridge_health(port, &settings.mcp.token, 10, 100),
+        Ok(Err(error)) => Err(error),
+        Err(mpsc::RecvTimeoutError::Timeout) => wait_for_bridge_health(port, &settings.mcp.token, 30, 250),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err("Agent Bridge startup channel disconnected before readiness".to_string())
+        }
+    };
+
+    if let Err(error) = readiness_result {
+        let previous_error = state
+            .bridge
+            .lock()
+            .map_err(|_| "bridge mutex poisoned".to_string())?
+            .runtime
+            .last_error
+            .clone();
         let _ = stop_bridge(app, state, "startFailed");
+        let failure_message = match previous_error {
+            Some(previous) if !previous.trim().is_empty() => format!("{error}. Sidecar output: {previous}"),
+            _ => error.clone(),
+        };
         update_bridge_runtime(app, state, "startFailed", |runtime| {
             runtime.status = "error".to_string();
-            runtime.last_error = Some(error.clone());
+            runtime.last_error = Some(failure_message.clone());
         })?;
-        return Err(error);
+        return Err(failure_message);
     }
 
     update_bridge_runtime(app, state, "startSucceeded", |runtime| {
-        runtime.status = "running".to_string();
-        runtime.bound_port = Some(port);
+        apply_bridge_health_success(runtime, port);
         runtime.pid = Some(pid);
-        runtime.last_error = None;
     })
 }
 
@@ -326,6 +482,65 @@ fn restart_bridge(app: &AppHandle, state: &AppState, reason: &str) -> Result<(),
     }
     let _ = stop_bridge(app, state, reason);
     start_bridge(app, state)
+}
+
+fn apply_bridge_failure(runtime: &mut BridgeRuntimeSnapshot, error: String) {
+    runtime.status = "error".to_string();
+    runtime.last_error = Some(error);
+}
+
+fn record_background_bridge_failure(app: &AppHandle, state: &AppState, error: String) {
+    let _ = update_bridge_runtime(app, state, "startFailed", |runtime| {
+        apply_bridge_failure(runtime, error.clone());
+    });
+}
+
+fn spawn_named_thread<F>(thread_name: &'static str, task: F) -> Result<(), std::io::Error>
+where
+    F: FnOnce() + Send + 'static,
+{
+    thread::Builder::new()
+        .name(thread_name.to_string())
+        .spawn(task)
+        .map(|_| ())
+}
+
+fn spawn_bridge_task<F>(app: AppHandle, thread_name: &'static str, task: F)
+where
+    F: FnOnce(AppHandle) -> Result<(), String> + Send + 'static,
+{
+    let worker_app = app.clone();
+    let spawn_result = spawn_named_thread(thread_name, move || {
+        if let Err(error) = task(worker_app.clone()) {
+            let state_ref = worker_app.state::<AppState>();
+            record_background_bridge_failure(&worker_app, &state_ref, error);
+        }
+    });
+
+    if let Err(error) = spawn_result {
+        let state_ref = app.state::<AppState>();
+        record_background_bridge_failure(
+            &app,
+            &state_ref,
+            format!("Failed to spawn {thread_name} worker: {error}"),
+        );
+    }
+}
+
+fn spawn_bridge_start(app: AppHandle) {
+    // Keep bridge lifecycle work off Tauri's Tokio runtime because it uses
+    // reqwest's blocking client and shell teardown paths that may block.
+    spawn_bridge_task(app, "bridge-start", |app| {
+        let state_ref = app.state::<AppState>();
+        start_bridge(&app, &state_ref)
+    });
+}
+
+fn spawn_bridge_restart(app: AppHandle, reason: &'static str) {
+    spawn_bridge_task(app, "bridge-restart", move |app| {
+        let state_ref = app.state::<AppState>();
+        restart_bridge(&app, &state_ref, reason)
+    });
 }
 
 fn current_projectctl_path() -> Result<PathBuf, String> {
@@ -397,11 +612,31 @@ fn open_main_window(app: &AppHandle) -> Result<(), String> {
 
 fn reload_watcher(app: &AppHandle, state: &AppState, settings: &Settings) -> Result<(), String> {
     let app_handle = app.clone();
+    let last_emit_at = Arc::new(Mutex::new(None::<std::time::Instant>));
     let mut watcher = RecommendedWatcher::new(
         move |result: Result<notify::Event, notify::Error>| {
-            if result.is_ok() {
-                let _ = app_handle.emit("workflow://changed", ());
+            let Ok(event) = result else {
+                return;
+            };
+            let relevant = event.paths.iter().any(|path| {
+                path.components()
+                    .any(|component| component.as_os_str() == std::ffi::OsStr::new(".project-workflow"))
+            });
+            if !relevant {
+                return;
             }
+            let Ok(mut last_emit) = last_emit_at.lock() else {
+                return;
+            };
+            let now = std::time::Instant::now();
+            if last_emit
+                .map(|previous| now.duration_since(previous) < Duration::from_millis(250))
+                .unwrap_or(false)
+            {
+                return;
+            }
+            *last_emit = Some(now);
+            let _ = app_handle.emit("workflow://changed", ());
         },
         Config::default(),
     )
@@ -424,6 +659,7 @@ fn reload_watcher(app: &AppHandle, state: &AppState, settings: &Settings) -> Res
 }
 
 fn load_state_payload(app: &AppHandle, state: &AppState) -> Result<LoadStatePayload, String> {
+    let _ = reconcile_bridge_runtime_if_healthy(state);
     let settings = ensure_settings(state)?;
     let projects = if settings.watched_roots.is_empty() {
         Vec::new()
@@ -492,20 +728,18 @@ fn remove_watch_root(app: AppHandle, state: State<AppState>, root: String) -> Re
 
 #[tauri::command]
 fn set_last_focused_project(
-    app: AppHandle,
     state: State<AppState>,
     root: Option<String>,
-) -> Result<String, String> {
+) -> Result<(), String> {
     let mut settings = ensure_settings(&state)?;
     settings.last_focused_project = root;
     save_settings(&state, &settings)?;
-    to_json_string(&load_state_payload(&app, &state)?)
+    Ok(())
 }
 
 #[tauri::command]
-fn get_project(app: AppHandle, state: State<AppState>, root: String) -> Result<String, String> {
+fn get_project(root: String) -> Result<String, String> {
     let result = get_project_service(&root).map_err(|error| error.to_string())?;
-    let _ = load_state_payload(&app, &state);
     to_json_string(&result)
 }
 
@@ -659,7 +893,7 @@ fn set_bridge_enabled(
     }
     save_settings(&state, &settings)?;
     if payload.enabled {
-        start_bridge(&app, &state)?;
+        spawn_bridge_start(app.clone());
     } else {
         stop_bridge(&app, &state, "stopSucceeded")?;
     }
@@ -668,8 +902,14 @@ fn set_bridge_enabled(
 
 #[tauri::command]
 fn restart_bridge_cmd(app: AppHandle, state: State<AppState>) -> Result<String, String> {
-    restart_bridge(&app, &state, "startRequested")?;
+    spawn_bridge_restart(app.clone(), "startRequested");
     to_json_string(&load_state_payload(&app, &state)?)
+}
+
+#[tauri::command]
+fn get_bridge_status(state: State<AppState>) -> Result<String, String> {
+    let _ = reconcile_bridge_runtime_if_healthy(&state);
+    to_json_string(&bridge_state_payload(&state, "snapshot")?)
 }
 
 #[tauri::command]
@@ -682,7 +922,7 @@ fn regenerate_bridge_token(app: AppHandle, state: State<AppState>) -> Result<Str
         mark_clients_stale(runtime, "tokenRotated");
     })?;
     if settings.mcp.enabled {
-        restart_bridge(&app, &state, "tokenRotated")?;
+        spawn_bridge_restart(app.clone(), "tokenRotated");
     }
     to_json_string(&load_state_payload(&app, &state)?)
 }
@@ -800,7 +1040,7 @@ fn build_tray(app: &AppHandle, state: &AppState) -> Result<(), String> {
 }
 
 fn main() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             let support_dir = app_support_dir(app.handle())?;
@@ -812,6 +1052,8 @@ fn main() {
                 tray_handles: Mutex::new(None),
                 bridge: Mutex::new(BridgeSupervisor {
                     child: None,
+                    child_pid: None,
+                    stopping_pid: None,
                     runtime: BridgeRuntimeSnapshot {
                         status: "stopped".to_string(),
                         ..BridgeRuntimeSnapshot::default()
@@ -825,9 +1067,6 @@ fn main() {
             let settings = ensure_settings(&state_ref)?;
             reload_watcher(app.handle(), &state_ref, &settings)?;
             let _ = load_state_payload(app.handle(), &state_ref);
-            if settings.mcp.enabled {
-                let _ = start_bridge(app.handle(), &state_ref);
-            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -846,9 +1085,88 @@ fn main() {
             propose_decision_cmd,
             set_bridge_enabled,
             restart_bridge_cmd,
+            get_bridge_status,
             regenerate_bridge_token,
             get_bridge_client_snippets,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app, event| {
+        if let RunEvent::Ready = event {
+            let state_ref = app.state::<AppState>();
+            if let Ok(settings) = ensure_settings(&state_ref) {
+                if settings.mcp.enabled {
+                    spawn_bridge_start(app.clone());
+                }
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_bridge_termination_does_not_clear_new_child() {
+        let mut supervisor = BridgeSupervisor {
+            child: None,
+            child_pid: Some(222),
+            stopping_pid: Some(111),
+            runtime: BridgeRuntimeSnapshot::default(),
+        };
+
+        let intentional = handle_terminated_bridge_process(&mut supervisor, 111);
+
+        assert!(intentional);
+        assert_eq!(supervisor.child_pid, Some(222));
+        assert_eq!(supervisor.stopping_pid, None);
+    }
+
+    #[test]
+    fn apply_bridge_failure_marks_runtime_error() {
+        let mut runtime = BridgeRuntimeSnapshot {
+            status: "starting".to_string(),
+            ..BridgeRuntimeSnapshot::default()
+        };
+
+        apply_bridge_failure(&mut runtime, "boom".to_string());
+
+        assert_eq!(runtime.status, "error");
+        assert_eq!(runtime.last_error.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn apply_bridge_health_success_marks_runtime_running() {
+        let mut runtime = BridgeRuntimeSnapshot {
+            status: "starting".to_string(),
+            last_error: Some("waiting".to_string()),
+            ..BridgeRuntimeSnapshot::default()
+        };
+
+        apply_bridge_health_success(&mut runtime, 4857);
+
+        assert_eq!(runtime.status, "running");
+        assert_eq!(runtime.bound_port, Some(4857));
+        assert_eq!(runtime.last_error, None);
+    }
+
+    #[test]
+    fn spawn_named_thread_runs_on_dedicated_thread() {
+        let current_thread = thread::current().id();
+        let (tx, rx) = mpsc::sync_channel(1);
+
+        spawn_named_thread("bridge-test", move || {
+            tx.send(thread::current().id())
+                .expect("thread id should send");
+        })
+        .expect("bridge test worker thread should spawn");
+
+        let worker_thread = rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("bridge worker thread should report its id");
+
+        assert_ne!(worker_thread, current_thread);
+    }
 }

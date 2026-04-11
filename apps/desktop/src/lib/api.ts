@@ -1,8 +1,15 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, isTauri } from '@tauri-apps/api/core';
 
 import type { BridgeSnippet, LoadStatePayload, ProjectDetail } from './types';
 
+function ensureTauriRuntime(command: string) {
+  if (!isTauri()) {
+    throw new Error(`${command} requires the Tauri desktop runtime.`);
+  }
+}
+
 async function invokeJson<T>(command: string, args?: Record<string, unknown>) {
+  ensureTauriRuntime(command);
   const payload = await invoke<string>(command, args);
   if (!payload) {
     throw new Error(`${command} returned no payload`);
@@ -34,7 +41,8 @@ export async function removeWatchRoot(root: string) {
 }
 
 export async function setLastFocusedProject(root: string | null) {
-  return invokeJson<LoadStatePayload>('set_last_focused_project', { root });
+  ensureTauriRuntime('set_last_focused_project');
+  await invoke('set_last_focused_project', { root });
 }
 
 export async function getProject(root: string) {
@@ -78,6 +86,14 @@ export async function setBridgeEnabled(enabled: boolean) {
 
 export async function restartBridge() {
   return invokeJson<LoadStatePayload>('restart_bridge_cmd');
+}
+
+export async function getBridgeStatus() {
+  return invokeJson<{
+    reason: string;
+    mcp: LoadStatePayload['settings']['mcp'];
+    mcpRuntime: LoadStatePayload['mcpRuntime'];
+  }>('get_bridge_status');
 }
 
 export async function regenerateBridgeToken() {

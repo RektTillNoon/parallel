@@ -115,10 +115,23 @@ pub fn sidecar_binary_filename() -> String {
 }
 
 pub fn resolve_bundled_projectctl_path(current_exe: &Path) -> PathBuf {
-    current_exe
+    let binary_name = sidecar_binary_filename();
+    let sibling = current_exe
         .parent()
         .unwrap_or_else(|| Path::new("."))
-        .join(sidecar_binary_filename())
+        .join(&binary_name);
+    if sibling.exists() {
+        return sibling;
+    }
+
+    let dev_binary = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("binaries")
+        .join(&binary_name);
+    if dev_binary.exists() {
+        return dev_binary;
+    }
+
+    sibling
 }
 
 pub fn mark_clients_stale(snapshot: &mut BridgeRuntimeSnapshot, reason: &str) {

@@ -1,20 +1,37 @@
+import { isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import {
+  Suspense,
+  lazy,
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import {
   addWatchRoot,
   getBridgeClientSnippets,
+  getBridgeStatus,
   getProject,
   initProject,
   loadState,
+  refreshProjects,
   regenerateBridgeToken,
   removeWatchRoot,
   restartBridge,
   setBridgeEnabled,
   setLastFocusedProject,
 } from './lib/api';
-import { resolveSelectionState } from './lib/state';
+import {
+  describeBridgeStatus,
+  resolveSelectionState,
+  runBootstrapTasks,
+  shouldReconcileBridgeStatus,
+} from './lib/state';
+import CollapsibleSection from './components/CollapsibleSection';
 import type {
   ActivityEvent,
   BridgeStateEvent,
@@ -26,72 +43,21 @@ import type {
   WorkflowSession,
 } from './lib/types';
 
-type CollapsibleSectionProps = {
-  label: string;
-  open: boolean;
-  onToggle: () => void;
-  children: ReactNode;
-  className?: string;
-  count?: number;
-};
-
 type IndexedPlanStep = {
   order: number;
   phase: Phase;
   step: Step;
 };
 
-function CollapsibleSection({
-  label,
-  open,
-  onToggle,
-  children,
-  className,
-  count,
-}: CollapsibleSectionProps) {
-  const reduceMotion = useReducedMotion();
-  const transition = reduceMotion
-    ? { duration: 0 }
-    : { duration: 0.22, ease: [0.22, 1, 0.36, 1] as const };
+type SessionGroups = Record<'active' | 'paused' | 'done', WorkflowSession[]>;
 
-  return (
-    <section className={`collapse-section ${className ?? ''}`.trim()}>
-      <button
-        type="button"
-        className="collapse-trigger"
-        aria-expanded={open}
-        onClick={onToggle}
-      >
-        <span>{label}</span>
-        <span className="collapse-meta">
-          {typeof count === 'number' ? <span>{count}</span> : null}
-          <motion.span
-            aria-hidden="true"
-            className="collapse-icon"
-            animate={{ rotate: open ? 90 : 0 }}
-            transition={transition}
-          >
-            ›
-          </motion.span>
-        </span>
-      </button>
-      <AnimatePresence initial={false}>
-        {open ? (
-          <motion.div
-            key="content"
-            className="collapse-content"
-            initial={reduceMotion ? false : { height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={reduceMotion ? { opacity: 0 } : { height: 0, opacity: 0 }}
-            transition={transition}
-          >
-            <div className="collapse-inner">{children}</div>
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
-    </section>
-  );
-}
+const relativeTimeFormatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+const LazySettingsModal = lazy(() => import('./components/SettingsModal'));
+const staleClientLabels = {
+  codex: 'Codex',
+  claudeCode: 'Claude Code',
+  claudeDesktop: 'Claude Desktop',
+} as const;
 
 function compactProjectStatus(status: ProjectSummary['status']) {
   switch (status) {
@@ -116,23 +82,22 @@ function formatRelativeTime(value: string | null | undefined) {
 
   const diffMs = timestamp - Date.now();
   const absMinutes = Math.round(Math.abs(diffMs) / 60000);
-  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
 
   if (absMinutes < 1) {
     return 'just now';
   }
 
   if (absMinutes < 60) {
-    return rtf.format(Math.round(diffMs / 60000), 'minute');
+    return relativeTimeFormatter.format(Math.round(diffMs / 60000), 'minute');
   }
 
   const absHours = Math.round(absMinutes / 60);
   if (absHours < 24) {
-    return rtf.format(Math.round(diffMs / 3600000), 'hour');
+    return relativeTimeFormatter.format(Math.round(diffMs / 3600000), 'hour');
   }
 
   const absDays = Math.round(absHours / 24);
-  return rtf.format(Math.round(diffMs / 86400000), 'day');
+  return relativeTimeFormatter.format(Math.round(diffMs / 86400000), 'day');
 }
 
 function getIndexedPlan(phases: Phase[]): IndexedPlanStep[] {
@@ -153,96 +118,606 @@ function timelineLabel(event: ActivityEvent, sessionsById: Map<string, WorkflowS
   return `${event.actor}/${event.source}`;
 }
 
+type SidebarProps = {
+  projects: ProjectSummary[];
+  selectedRoot: string | null;
+  reposOpen: boolean;
+  settingsOpen: boolean;
+  watchedRootCount: number;
+  onSync: () => void;
+  onToggleRepos: () => void;
+  onSelectProject: (project: ProjectSummary) => void;
+  onToggleSettings: () => void;
+};
+
+const Sidebar = memo(function Sidebar({
+  projects,
+  selectedRoot,
+  reposOpen,
+  settingsOpen,
+  watchedRootCount,
+  onSync,
+  onToggleRepos,
+  onSelectProject,
+  onToggleSettings,
+}: SidebarProps) {
+  return (
+    <aside className="sidebar">
+      <div className="sidebar-block">
+        <div className="panel-header sidebar-top">
+          <h1 className="brand-mark">parallel</h1>
+          <div className="sidebar-actions">
+            <button className="ghost-button" onClick={onSync}>
+              Sync
+            </button>
+          </div>
+        </div>
+        <p className="sidebar-meta">
+          {watchedRootCount} roots · {projects.length} repos
+        </p>
+      </div>
+      <CollapsibleSection
+        label="Repos"
+        open={reposOpen}
+        onToggle={onToggleRepos}
+        className="sidebar-block repos-toggle"
+        count={projects.length}
+      >
+        <div className="project-list">
+          {projects.map((project) => (
+            <button
+              className={`project-row ${selectedRoot === project.root ? 'selected' : ''}`}
+              key={project.root}
+              onClick={() => onSelectProject(project)}
+            >
+              <div className="project-row-head">
+                <strong>{project.name}</strong>
+                <span className="project-row-state">{compactProjectStatus(project.status)}</span>
+              </div>
+              {project.initialized ? (
+                <div className="project-row-meta">
+                  <span>
+                    {project.completedStepCount}/{project.totalStepCount}
+                  </span>
+                  <span>{project.activeSessionCount} sessions</span>
+                </div>
+              ) : null}
+              {project.currentStepTitle ? (
+                <div className="project-row-focus">{project.currentStepTitle}</div>
+              ) : null}
+            </button>
+          ))}
+        </div>
+      </CollapsibleSection>
+      <div className="sidebar-footer">
+        <button
+          type="button"
+          className={`ghost-button settings-button sidebar-settings-button ${settingsOpen ? 'is-open' : ''}`}
+          aria-expanded={settingsOpen}
+          aria-controls="settings-dialog"
+          aria-haspopup="dialog"
+          aria-label={settingsOpen ? 'Close settings' : 'Open settings'}
+          onClick={onToggleSettings}
+        >
+          <span className="settings-button-icon" aria-hidden="true">
+            ⚙
+          </span>
+          <span className="settings-button-label">Settings</span>
+        </button>
+      </div>
+    </aside>
+  );
+});
+
+type FocusPanelProps = {
+  detail: ProjectDetail;
+  currentOwner: WorkflowSession | null;
+  currentStepEntry: IndexedPlanStep | null;
+  nextStepEntry: IndexedPlanStep | undefined;
+};
+
+const FocusPanel = memo(function FocusPanel({
+  detail,
+  currentOwner,
+  currentStepEntry,
+  nextStepEntry,
+}: FocusPanelProps) {
+  return (
+    <section className="panel focus-panel">
+      <div className="focus-head">
+        <span className={`status status-${detail.runtime.status}`}>{detail.runtime.status}</span>
+        {detail.runtime.active_branch ? (
+          <span className="hero-branch">{detail.runtime.active_branch}</span>
+        ) : null}
+      </div>
+      <h3>{currentStepEntry ? `${currentStepEntry.order}. ${currentStepEntry.step.title}` : 'No current step'}</h3>
+      {currentStepEntry?.step.summary ? <p className="focus-summary">{currentStepEntry.step.summary}</p> : null}
+      <div className="focus-meta-grid">
+        <div>
+          <label>Owning session</label>
+          <strong>{currentOwner?.title ?? 'Unowned'}</strong>
+        </div>
+        <div>
+          <label>Next valid step</label>
+          <strong>{nextStepEntry ? `${nextStepEntry.order}. ${nextStepEntry.step.title}` : 'None'}</strong>
+        </div>
+      </div>
+      {detail.runtime.blockers.length > 0 ? (
+        <div className="blocker-strip">
+          {detail.runtime.blockers.map((blocker) => (
+            <span className="blocker-chip" key={blocker}>
+              {blocker}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+});
+
+type PlanPanelProps = {
+  indexedPlan: IndexedPlanStep[];
+  currentStepId: string | null | undefined;
+  expandedSteps: Record<string, boolean>;
+  sessionsById: Map<string, WorkflowSession>;
+  onToggleStep: (stepId: string) => void;
+};
+
+const PlanPanel = memo(function PlanPanel({
+  indexedPlan,
+  currentStepId,
+  expandedSteps,
+  sessionsById,
+  onToggleStep,
+}: PlanPanelProps) {
+  return (
+    <section className="panel plan-panel">
+      <div className="panel-header">
+        <h3>Plan</h3>
+        <span className="muted">{indexedPlan.length} steps</span>
+      </div>
+      <div className="plan-list">
+        {indexedPlan.map((entry) => {
+          const owner = entry.step.owner_session_id
+            ? sessionsById.get(entry.step.owner_session_id) ?? null
+            : null;
+          const isExpanded = expandedSteps[entry.step.id] ?? entry.step.id === currentStepId;
+          const hasDetails = entry.step.details.length > 0 || entry.step.subtasks.length > 0;
+
+          return (
+            <article
+              className={`plan-row ${entry.step.id === currentStepId ? 'current' : ''} status-${entry.step.status}`}
+              key={entry.step.id}
+            >
+              <button
+                type="button"
+                className="plan-row-main"
+                onClick={hasDetails ? () => onToggleStep(entry.step.id) : undefined}
+              >
+                <span className="plan-order">{entry.order}</span>
+                <div className="plan-copy">
+                  <div className="plan-row-head">
+                    <strong>{entry.step.title}</strong>
+                    <span className={`status status-${entry.step.status}`}>{entry.step.status}</span>
+                  </div>
+                  {entry.step.summary ? <p className="plan-summary">{entry.step.summary}</p> : null}
+                  <div className="plan-row-meta">
+                    <span>{entry.phase.title}</span>
+                    <span>{owner?.title ?? 'No owner'}</span>
+                  </div>
+                </div>
+                {hasDetails ? <span className="plan-row-toggle">{isExpanded ? '−' : '+'}</span> : null}
+              </button>
+              {hasDetails && isExpanded ? (
+                <div className="plan-row-details">
+                  {entry.step.details.length > 0 ? (
+                    <ul className="detail-list">
+                      {entry.step.details.map((detailLine) => (
+                        <li key={detailLine}>{detailLine}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {entry.step.subtasks.length > 0 ? (
+                    <div className="subtask-list">
+                      {entry.step.subtasks.map((subtask) => (
+                        <div className="subtask-row" key={subtask.id}>
+                          <span className={`subtask-state subtask-${subtask.status}`} />
+                          <span>{subtask.title}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+});
+
+type SessionsPanelProps = {
+  groupedSessions: SessionGroups;
+  stepTitlesById: Map<string, string>;
+};
+
+const SessionsPanel = memo(function SessionsPanel({
+  groupedSessions,
+  stepTitlesById,
+}: SessionsPanelProps) {
+  const groups: Array<keyof SessionGroups> = ['active', 'paused', 'done'];
+
+  return (
+    <section className="panel session-panel">
+      <div className="panel-header">
+        <h3>Sessions</h3>
+      </div>
+      {groups.map((groupKey) =>
+        groupedSessions[groupKey].length > 0 ? (
+          <div className="session-group" key={groupKey}>
+            <label>{groupKey}</label>
+            <div className="session-list">
+              {groupedSessions[groupKey].map((session) => (
+                <div className="session-row" key={session.id}>
+                  <div>
+                    <strong>{session.title}</strong>
+                    <p className="muted">
+                      {session.actor}/{session.source}
+                    </p>
+                  </div>
+                  <div className="session-row-meta">
+                    <span>
+                      {session.owned_step_id
+                        ? stepTitlesById.get(session.owned_step_id) ?? session.owned_step_id
+                        : 'No owned step'}
+                    </span>
+                    <span>{formatRelativeTime(session.last_updated_at)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null,
+      )}
+    </section>
+  );
+});
+
+type TimelinePanelProps = {
+  timeline: ActivityEvent[];
+  sessionsById: Map<string, WorkflowSession>;
+  stepTitlesById: Map<string, string>;
+};
+
+const TimelinePanel = memo(function TimelinePanel({
+  timeline,
+  sessionsById,
+  stepTitlesById,
+}: TimelinePanelProps) {
+  return (
+    <section className="panel timeline-panel">
+      <div className="panel-header">
+        <h3>Timeline</h3>
+      </div>
+      <div className="timeline-list">
+        {timeline.map((event) => (
+          <div className="timeline-row" key={`${event.timestamp}-${event.summary}`}>
+            <div className="timeline-row-head">
+              <strong>{event.summary}</strong>
+              <span>{formatRelativeTime(event.timestamp)}</span>
+            </div>
+            <div className="timeline-row-meta">
+              <span>{timelineLabel(event, sessionsById)}</span>
+              {event.step_id ? <span>{stepTitlesById.get(event.step_id) ?? event.step_id}</span> : null}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+});
+
+type WorkspaceViewProps = {
+  detail: ProjectDetail;
+  completedCount: number;
+  indexedPlan: IndexedPlanStep[];
+  activeSessionCount: number;
+  currentOwner: WorkflowSession | null;
+  currentStepEntry: IndexedPlanStep | null;
+  nextStepEntry: IndexedPlanStep | undefined;
+  expandedSteps: Record<string, boolean>;
+  sessionsById: Map<string, WorkflowSession>;
+  groupedSessions: SessionGroups;
+  timeline: ActivityEvent[];
+  stepTitlesById: Map<string, string>;
+  onToggleStep: (stepId: string) => void;
+};
+
+const WorkspaceView = memo(function WorkspaceView({
+  detail,
+  completedCount,
+  indexedPlan,
+  activeSessionCount,
+  currentOwner,
+  currentStepEntry,
+  nextStepEntry,
+  expandedSteps,
+  sessionsById,
+  groupedSessions,
+  timeline,
+  stepTitlesById,
+  onToggleStep,
+}: WorkspaceViewProps) {
+  return (
+    <section className="workspace">
+      <section className="panel workspace-header">
+        <div>
+          <h2>{detail.manifest.name}</h2>
+          <p className="muted">{detail.manifest.root}</p>
+        </div>
+        <div className="workspace-header-meta">
+          <span>{completedCount}/{indexedPlan.length} complete</span>
+          <span>{activeSessionCount} active sessions</span>
+          <span>{formatRelativeTime(detail.runtime.last_updated_at)}</span>
+        </div>
+      </section>
+
+      <section className="workspace-grid">
+        <div className="workspace-main">
+          <FocusPanel
+            detail={detail}
+            currentOwner={currentOwner}
+            currentStepEntry={currentStepEntry}
+            nextStepEntry={nextStepEntry}
+          />
+          <PlanPanel
+            indexedPlan={indexedPlan}
+            currentStepId={currentStepEntry?.step.id}
+            expandedSteps={expandedSteps}
+            sessionsById={sessionsById}
+            onToggleStep={onToggleStep}
+          />
+        </div>
+
+        <aside className="workspace-side">
+          {detail.sessions.length > 0 ? (
+            <SessionsPanel groupedSessions={groupedSessions} stepTitlesById={stepTitlesById} />
+          ) : null}
+          {timeline.length > 0 ? (
+            <TimelinePanel
+              timeline={timeline}
+              sessionsById={sessionsById}
+              stepTitlesById={stepTitlesById}
+            />
+          ) : null}
+        </aside>
+      </section>
+    </section>
+  );
+});
+
 export default function App() {
   const [state, setState] = useState<LoadStatePayload | null>(null);
   const [selectedRoot, setSelectedRoot] = useState<string | null>(null);
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [loading, setLoading] = useState(true);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [watchRootInput, setWatchRootInput] = useState('');
   const [watchRootError, setWatchRootError] = useState<string | null>(null);
   const [watchRootPending, setWatchRootPending] = useState(false);
   const [initName, setInitName] = useState('');
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [rootsOpen, setRootsOpen] = useState(false);
   const [bridgeOpen, setBridgeOpen] = useState(true);
   const [reposOpen, setReposOpen] = useState(true);
   const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
-
-  async function reloadState(selectRoot?: string | null) {
-    setLoading(true);
-    setError(null);
-    try {
-      const nextState = await loadState();
-      if (!nextState) {
-        throw new Error('load_state returned no payload');
-      }
-      setState(nextState);
-      const selection = resolveSelectionState(nextState, selectRoot);
-
-      setSelectedRoot(selection.selectedRoot);
-      if (selection.shouldLoadDetail && selection.selectedRoot) {
-        setDetail(await getProject(selection.selectedRoot));
-      } else {
-        setDetail(null);
-      }
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : String(loadError));
-    } finally {
-      setLoading(false);
-    }
-  }
+  const reloadInFlight = useRef(false);
+  const reloadQueued = useRef<string | null | undefined>(undefined);
+  const selectedRootRef = useRef<string | null>(null);
 
   useEffect(() => {
-    void reloadState();
-    const unlistenPromise = listen('workflow://changed', () => {
-      void reloadState(selectedRoot);
-    });
-    const bridgePromise = listen<BridgeStateEvent>('bridge://state-changed', (event) => {
+    selectedRootRef.current = selectedRoot;
+  }, [selectedRoot]);
+
+  const applyLoadState = useCallback(
+    async (
+      nextState: LoadStatePayload,
+      options?: {
+        selectRoot?: string | null;
+        preserveDetail?: boolean;
+      },
+    ) => {
+      setState(nextState);
+      const selection = resolveSelectionState(nextState, options?.selectRoot ?? selectedRootRef.current);
+      setSelectedRoot(selection.selectedRoot);
+
+      if (!selection.shouldLoadDetail || !selection.selectedRoot) {
+        setDetail(null);
+        setDetailLoading(false);
+        return;
+      }
+
+      if (options?.preserveDetail && detail?.manifest.root === selection.selectedRoot) {
+        return;
+      }
+
+      setDetailLoading(true);
+      try {
+        setDetail(await getProject(selection.selectedRoot));
+      } catch (loadError) {
+        setError(loadError instanceof Error ? loadError.message : String(loadError));
+      } finally {
+        setDetailLoading(false);
+      }
+    },
+    [detail?.manifest.root],
+  );
+
+  const reloadState = useCallback(
+    async (selectRoot?: string | null) => {
+      if (reloadInFlight.current) {
+        reloadQueued.current = selectRoot;
+        return;
+      }
+
+      reloadInFlight.current = true;
+      setLoading(true);
+      setError(null);
+      try {
+        const nextState = await loadState();
+        if (!nextState) {
+          throw new Error('load_state returned no payload');
+        }
+        await applyLoadState(nextState, { selectRoot });
+      } catch (loadError) {
+        setError(loadError instanceof Error ? loadError.message : String(loadError));
+      } finally {
+        reloadInFlight.current = false;
+        setLoading(false);
+        if (reloadQueued.current !== undefined) {
+          const queued = reloadQueued.current;
+          reloadQueued.current = undefined;
+          void reloadState(queued);
+        }
+      }
+    },
+    [applyLoadState],
+  );
+
+  const reconcileBridgeState = useCallback(async () => {
+    try {
+      const snapshot = await getBridgeStatus();
+      if (!snapshot) {
+        return;
+      }
+
       setState((current) =>
         current
           ? {
               ...current,
               settings: {
                 ...current.settings,
-                mcp: event.payload.mcp,
+                mcp: snapshot.mcp,
               },
-              mcpRuntime: event.payload.mcpRuntime,
+              mcpRuntime: snapshot.mcpRuntime,
             }
           : current,
       );
-    });
+    } catch {
+      // Keep the last visible bridge snapshot if a background reconcile misses.
+    }
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const unlisteners: Array<() => void> = [];
+
+    void runBootstrapTasks(
+      async () => {
+        if (!isTauri()) {
+          return;
+        }
+
+        const unlistenWorkflow = await listen('workflow://changed', () => {
+          void reloadState(selectedRootRef.current);
+        });
+        if (!active) {
+          unlistenWorkflow();
+          return;
+        }
+        unlisteners.push(unlistenWorkflow);
+
+        const unlistenBridge = await listen<BridgeStateEvent>('bridge://state-changed', (event) => {
+          setState((current) =>
+            current
+              ? {
+                  ...current,
+                  settings: {
+                    ...current.settings,
+                    mcp: event.payload.mcp,
+                  },
+                  mcpRuntime: event.payload.mcpRuntime,
+                }
+              : current,
+          );
+        });
+        if (!active) {
+          unlistenBridge();
+          return;
+        }
+        unlisteners.push(unlistenBridge);
+      },
+      async () => {
+        if (active) {
+          await reloadState();
+        }
+      },
+    );
 
     return () => {
-      void unlistenPromise.then((unlisten) => unlisten());
-      void bridgePromise.then((unlisten) => unlisten());
+      active = false;
+      for (const unlisten of unlisteners) {
+        unlisten();
+      }
     };
-  }, []);
+  }, [reloadState]);
+
+  useEffect(() => {
+    if (!settingsOpen || !bridgeOpen || !shouldReconcileBridgeStatus(state)) {
+      return;
+    }
+
+    void reconcileBridgeState();
+    const interval = window.setInterval(() => {
+      void reconcileBridgeState();
+    }, 1500);
+
+    return () => window.clearInterval(interval);
+  }, [
+    bridgeOpen,
+    reconcileBridgeState,
+    settingsOpen,
+    state?.settings.mcp.enabled,
+    state?.mcpRuntime.status,
+  ]);
 
   const selectedSummary = useMemo(() => {
     return state?.projects.find((project) => project.root === selectedRoot) ?? null;
-  }, [selectedRoot, state]);
+  }, [selectedRoot, state?.projects]);
 
   const indexedPlan = useMemo(() => {
     return detail ? getIndexedPlan(detail.plan.phases) : [];
   }, [detail]);
 
+  const planEntriesById = useMemo(() => {
+    return new Map(indexedPlan.map((entry) => [entry.step.id, entry]));
+  }, [indexedPlan]);
+
+  const stepTitlesById = useMemo(() => {
+    return new Map(indexedPlan.map((entry) => [entry.step.id, entry.step.title]));
+  }, [indexedPlan]);
+
+  const stepStatusById = useMemo(() => {
+    return new Map(indexedPlan.map((entry) => [entry.step.id, entry.step.status]));
+  }, [indexedPlan]);
+
   const currentStepEntry = useMemo(() => {
     if (!detail) {
       return null;
     }
-    return indexedPlan.find((entry) => entry.step.id === detail.runtime.current_step_id) ?? null;
-  }, [detail, indexedPlan]);
+    return planEntriesById.get(detail.runtime.current_step_id ?? '') ?? null;
+  }, [detail, planEntriesById]);
 
   const nextStepEntry = useMemo(() => {
     return indexedPlan.find(
       (entry) =>
         entry.step.id !== currentStepEntry?.step.id &&
         entry.step.status !== 'done' &&
-        entry.step.depends_on.every((dependency) =>
-          indexedPlan.find((candidate) => candidate.step.id === dependency)?.step.status === 'done',
-        ),
+        entry.step.depends_on.every((dependency) => stepStatusById.get(dependency) === 'done'),
     );
-  }, [currentStepEntry?.step.id, indexedPlan]);
+  }, [currentStepEntry?.step.id, indexedPlan, stepStatusById]);
 
   const sessionsById = useMemo(() => {
     return new Map((detail?.sessions ?? []).map((session) => [session.id, session]));
@@ -254,64 +729,83 @@ export default function App() {
       : null;
   }, [currentStepEntry, sessionsById]);
 
-  const activeSessions = useMemo(
-    () => (detail?.sessions ?? []).filter((session) => session.status === 'active'),
-    [detail],
-  );
-
-  const groupedSessions = useMemo(() => {
-    const sessions = detail?.sessions ?? [];
-    return {
-      active: sessions.filter((session) => session.status === 'active'),
-      paused: sessions.filter((session) => session.status === 'paused'),
-      done: sessions.filter((session) => session.status === 'done'),
+  const groupedSessions = useMemo<SessionGroups>(() => {
+    const groups: SessionGroups = {
+      active: [],
+      paused: [],
+      done: [],
     };
+
+    for (const session of detail?.sessions ?? []) {
+      groups[session.status].push(session);
+    }
+
+    return groups;
   }, [detail]);
 
-  const completedCount = useMemo(
-    () => indexedPlan.filter((entry) => entry.step.status === 'done').length,
-    [indexedPlan],
-  );
+  const activeSessionCount = groupedSessions.active.length;
+
+  const completedCount = useMemo(() => {
+    return indexedPlan.reduce((count, entry) => count + (entry.step.status === 'done' ? 1 : 0), 0);
+  }, [indexedPlan]);
 
   const timeline = useMemo(() => {
-    return detail?.recentActivity.slice().reverse() ?? [];
+    return detail?.recentActivity.slice(-12).reverse() ?? [];
   }, [detail]);
 
   const noProjectsDiscovered =
-    !loading && state && state.settings.watchedRoots.length > 0 && state.projects.length === 0;
+    !loading && Boolean(state) && state.settings.watchedRoots.length > 0 && state.projects.length === 0;
 
   useEffect(() => {
     if (!currentStepEntry) {
       return;
     }
+
     setExpandedSteps((existing) => ({
       ...existing,
       [currentStepEntry.step.id]: true,
     }));
   }, [currentStepEntry?.step.id]);
 
-  async function selectProject(project: ProjectSummary) {
+  useEffect(() => {
+    if (!settingsOpen) {
+      return;
+    }
+
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setSettingsOpen(false);
+      }
+    }
+
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [settingsOpen]);
+
+  const selectProject = useCallback(async (project: ProjectSummary) => {
     setSelectedRoot(project.root);
-    await setLastFocusedProject(project.root);
-    if (project.initialized) {
-      setDetail(await getProject(project.root));
-    } else {
-      setDetail(null);
+    setDetail(null);
+    void setLastFocusedProject(project.root).catch((selectionError) => {
+      setError(selectionError instanceof Error ? selectionError.message : String(selectionError));
+    });
+
+    if (!project.initialized) {
+      setDetailLoading(false);
       setInitName(project.name);
+      return;
     }
-  }
 
-  async function handleMutation<T>(operation: Promise<T>) {
-    setError(null);
+    setDetailLoading(true);
     try {
-      await operation;
-      await reloadState(selectedRoot);
-    } catch (mutationError) {
-      setError(mutationError instanceof Error ? mutationError.message : String(mutationError));
+      setDetail(await getProject(project.root));
+    } catch (selectionError) {
+      setError(selectionError instanceof Error ? selectionError.message : String(selectionError));
+    } finally {
+      setDetailLoading(false);
     }
-  }
+  }, []);
 
-  async function handleAddWatchRoot() {
+  const handleAddWatchRoot = useCallback(async () => {
     const candidate = watchRootInput.trim();
     if (!candidate) {
       return;
@@ -322,19 +816,8 @@ export default function App() {
     setWatchRootPending(true);
     try {
       const nextState = await addWatchRoot(candidate);
-      if (!nextState) {
-        throw new Error('add_watch_root returned no payload');
-      }
-      setState(nextState);
       setWatchRootInput('');
-      const selection = resolveSelectionState(nextState, selectedRoot);
-
-      setSelectedRoot(selection.selectedRoot);
-      if (selection.shouldLoadDetail && selection.selectedRoot) {
-        setDetail(await getProject(selection.selectedRoot));
-      } else {
-        setDetail(null);
-      }
+      await applyLoadState(nextState, { preserveDetail: true });
     } catch (mutationError) {
       const message = mutationError instanceof Error ? mutationError.message : String(mutationError);
       setError(message);
@@ -342,19 +825,75 @@ export default function App() {
     } finally {
       setWatchRootPending(false);
     }
-  }
+  }, [applyLoadState, watchRootInput]);
 
-  async function handleBridgeToggle(enabled: boolean) {
+  const handleRemoveWatchRoot = useCallback(
+    async (root: string) => {
+      setError(null);
+      try {
+        const nextState = await removeWatchRoot(root);
+        await applyLoadState(nextState, { preserveDetail: true });
+      } catch (mutationError) {
+        setError(mutationError instanceof Error ? mutationError.message : String(mutationError));
+      }
+    },
+    [applyLoadState],
+  );
+
+  const handleBridgeToggle = useCallback(
+    async (enabled: boolean) => {
+      setError(null);
+      try {
+        const nextState = await setBridgeEnabled(enabled);
+        await applyLoadState(nextState, { preserveDetail: true });
+      } catch (mutationError) {
+        setError(mutationError instanceof Error ? mutationError.message : String(mutationError));
+      }
+    },
+    [applyLoadState],
+  );
+
+  const handleRestartBridge = useCallback(async () => {
     setError(null);
     try {
-      const nextState = await setBridgeEnabled(enabled);
-      setState(nextState);
+      const nextState = await restartBridge();
+      await applyLoadState(nextState, { preserveDetail: true });
     } catch (mutationError) {
       setError(mutationError instanceof Error ? mutationError.message : String(mutationError));
     }
-  }
+  }, [applyLoadState]);
 
-  async function handleCopyBridgeSnippet(kind: string) {
+  const handleRegenerateBridgeToken = useCallback(async () => {
+    setError(null);
+    try {
+      const nextState = await regenerateBridgeToken();
+      await applyLoadState(nextState, { preserveDetail: true });
+    } catch (mutationError) {
+      setError(mutationError instanceof Error ? mutationError.message : String(mutationError));
+    }
+  }, [applyLoadState]);
+
+  const handleInitProject = useCallback(async () => {
+    if (!selectedSummary) {
+      return;
+    }
+
+    setError(null);
+    setDetailLoading(true);
+    try {
+      const nextDetail = await initProject(selectedSummary.root, initName || selectedSummary.name);
+      setDetail(nextDetail);
+      setSelectedRoot(nextDetail.manifest.root);
+      const nextState = await refreshProjects();
+      setState(nextState);
+    } catch (mutationError) {
+      setError(mutationError instanceof Error ? mutationError.message : String(mutationError));
+    } finally {
+      setDetailLoading(false);
+    }
+  }, [initName, selectedSummary]);
+
+  const handleCopyBridgeSnippet = useCallback(async (kind: string) => {
     setError(null);
     try {
       const snippets = await getBridgeClientSnippets(kind);
@@ -362,198 +901,93 @@ export default function App() {
       if (!snippet) {
         throw new Error(`No snippet returned for ${kind}`);
       }
+
       await navigator.clipboard.writeText(snippet.content);
-      setState((current) =>
-        current
-          ? {
-              ...current,
-              mcpRuntime: {
-                ...current.mcpRuntime,
-                staleClients: current.mcpRuntime.staleClients.filter((candidate) => candidate !== kind),
-                setupStale: current.mcpRuntime.staleClients.some((candidate) => candidate !== kind),
-                staleReasons:
-                  current.mcpRuntime.staleClients.filter((candidate) => candidate !== kind).length > 0
-                    ? current.mcpRuntime.staleReasons
-                    : [],
-              },
-            }
-          : current,
-      );
+      setState((current) => {
+        if (!current) {
+          return current;
+        }
+
+        const staleClients = current.mcpRuntime.staleClients.filter((candidate) => candidate !== kind);
+        return {
+          ...current,
+          mcpRuntime: {
+            ...current.mcpRuntime,
+            staleClients,
+            setupStale: staleClients.length > 0,
+            staleReasons: staleClients.length > 0 ? current.mcpRuntime.staleReasons : [],
+          },
+        };
+      });
     } catch (mutationError) {
       setError(mutationError instanceof Error ? mutationError.message : String(mutationError));
     }
-  }
+  }, []);
+
+  const handleTogglePlanStep = useCallback(
+    (stepId: string) => {
+      setExpandedSteps((existing) => ({
+        ...existing,
+        [stepId]: !(existing[stepId] ?? stepId === currentStepEntry?.step.id),
+      }));
+    },
+    [currentStepEntry?.step.id],
+  );
+
+  const handleSync = useCallback(() => {
+    void reloadState(selectedRootRef.current);
+  }, [reloadState]);
+
+  const handleToggleRepos = useCallback(() => setReposOpen((open) => !open), []);
+  const handleToggleSettings = useCallback(() => setSettingsOpen((open) => !open), []);
+  const handleCloseSettings = useCallback(() => setSettingsOpen(false), []);
+  const handleToggleRoots = useCallback(() => setRootsOpen((open) => !open), []);
+  const handleToggleBridge = useCallback(() => setBridgeOpen((open) => !open), []);
+  const handleWatchRootInputChange = useCallback((value: string) => setWatchRootInput(value), []);
+  const handleProjectSelection = useCallback(
+    (project: ProjectSummary) => {
+      void selectProject(project);
+    },
+    [selectProject],
+  );
 
   const bridgePort = state?.mcpRuntime.boundPort ?? state?.settings.mcp.port ?? null;
   const bridgeUrl = bridgePort ? `http://127.0.0.1:${bridgePort}/mcp` : 'Not configured';
   const maskedToken = state?.settings.mcp.token
     ? `${state.settings.mcp.token.slice(0, 6)}••••${state.settings.mcp.token.slice(-4)}`
     : 'Not generated';
-  const staleClientLabels = {
-    codex: 'Codex',
-    claudeCode: 'Claude Code',
-    claudeDesktop: 'Claude Desktop',
-  } as const;
+  const bridgeStatus = describeBridgeStatus(
+    state?.mcpRuntime ?? {
+      status: 'stopped',
+      boundPort: null,
+      pid: null,
+      startedAt: null,
+      lastError: null,
+      setupStale: false,
+      staleReasons: [],
+      staleClients: [],
+    },
+    Boolean(state?.settings.mcp.enabled),
+  );
+  const staleClientNames = useMemo(() => {
+    return (state?.mcpRuntime.staleClients ?? [])
+      .map((kind) => staleClientLabels[kind as keyof typeof staleClientLabels] ?? kind)
+      .join(', ');
+  }, [state?.mcpRuntime.staleClients]);
 
   return (
     <div className="shell">
-      <aside className="sidebar">
-        <div className="sidebar-block">
-          <div className="panel-header sidebar-top">
-            <h1 className="brand-mark">parallel</h1>
-            <button className="ghost-button" onClick={() => void reloadState(selectedRoot)}>
-              Sync
-            </button>
-          </div>
-          <p className="sidebar-meta">
-            {state?.settings.watchedRoots.length ?? 0} roots · {state?.projects.length ?? 0} repos
-          </p>
-          <CollapsibleSection
-            label="Roots"
-            open={rootsOpen}
-            onToggle={() => setRootsOpen((open) => !open)}
-            className="roots-toggle"
-            count={state?.settings.watchedRoots.length ?? 0}
-          >
-            <form
-              className="stack compact-form watch-root-form"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void handleAddWatchRoot();
-              }}
-            >
-              <div className="watch-root-controls">
-                <input
-                  value={watchRootInput}
-                  onChange={(event) => setWatchRootInput(event.target.value)}
-                  placeholder="/Users/light/Projects"
-                />
-                <button className="add-root-button" type="submit" disabled={watchRootPending}>
-                  <span aria-hidden="true">+</span>
-                  <span>{watchRootPending ? 'Adding…' : 'Add'}</span>
-                </button>
-              </div>
-              {watchRootError ? <div className="inline-error">{watchRootError}</div> : null}
-            </form>
-            <div className="root-list">
-              {state?.settings.watchedRoots.map((root) => (
-                <div className="root-row" key={root}>
-                  <code>{root}</code>
-                  <button
-                    className="ghost-button root-row-action"
-                    onClick={() => void handleMutation(removeWatchRoot(root))}
-                  >
-                    Remove
-                  </button>
-                </div>
-              ))}
-            </div>
-          </CollapsibleSection>
-        </div>
-        <CollapsibleSection
-          label="Agent Bridge"
-          open={bridgeOpen}
-          onToggle={() => setBridgeOpen((open) => !open)}
-          className="sidebar-block bridge-toggle"
-        >
-          <section className="panel bridge-panel">
-            <div className="panel-header">
-              <h3>Agent Bridge</h3>
-              <label className="toggle-row">
-                <span>{state?.settings.mcp.enabled ? 'On' : 'Off'}</span>
-                <input
-                  type="checkbox"
-                  checked={Boolean(state?.settings.mcp.enabled)}
-                  onChange={(event) => void handleBridgeToggle(event.target.checked)}
-                />
-              </label>
-            </div>
-            <div className="bridge-meta">
-              <div>
-                <label>Status</label>
-                <strong className={`status status-${state?.mcpRuntime.status ?? 'stopped'}`}>
-                  {state?.mcpRuntime.status ?? 'stopped'}
-                </strong>
-              </div>
-              <div>
-                <label>URL</label>
-                <code className="bridge-url">{bridgeUrl}</code>
-              </div>
-              <div>
-                <label>Token</label>
-                <code className="bridge-url">{maskedToken}</code>
-              </div>
-            </div>
-            {state?.mcpRuntime.setupStale ? (
-              <div className="bridge-warning">
-                Re-copy setup for:{' '}
-                {state.mcpRuntime.staleClients
-                  .map((kind) => staleClientLabels[kind as keyof typeof staleClientLabels] ?? kind)
-                  .join(', ')}
-              </div>
-            ) : null}
-            {state?.mcpRuntime.lastError ? (
-              <div className="inline-error">{state.mcpRuntime.lastError}</div>
-            ) : null}
-            <div className="bridge-actions">
-              <button
-                type="button"
-                onClick={() => void handleMutation(restartBridge())}
-                disabled={!state?.settings.mcp.enabled}
-              >
-                Restart
-              </button>
-              <button type="button" onClick={() => void handleMutation(regenerateBridgeToken())}>
-                Regenerate token
-              </button>
-            </div>
-            <div className="bridge-copy-list">
-              <button type="button" onClick={() => void handleCopyBridgeSnippet('codex')}>
-                Copy Codex setup
-              </button>
-              <button type="button" onClick={() => void handleCopyBridgeSnippet('claudeCode')}>
-                Copy Claude Code setup
-              </button>
-              <button type="button" onClick={() => void handleCopyBridgeSnippet('claudeDesktop')}>
-                Copy Claude Desktop setup
-              </button>
-            </div>
-          </section>
-        </CollapsibleSection>
-        <CollapsibleSection
-          label="Repos"
-          open={reposOpen}
-          onToggle={() => setReposOpen((open) => !open)}
-          className="sidebar-block repos-toggle"
-          count={state?.projects.length ?? 0}
-        >
-          <div className="project-list">
-            {state?.projects.map((project) => (
-              <button
-                className={`project-row ${selectedRoot === project.root ? 'selected' : ''}`}
-                key={project.root}
-                onClick={() => void selectProject(project)}
-              >
-                <div className="project-row-head">
-                  <strong>{project.name}</strong>
-                  <span className="project-row-state">{compactProjectStatus(project.status)}</span>
-                </div>
-                {project.initialized ? (
-                  <div className="project-row-meta">
-                    <span>
-                      {project.completedStepCount}/{project.totalStepCount}
-                    </span>
-                    <span>{project.activeSessionCount} sessions</span>
-                  </div>
-                ) : null}
-                {project.currentStepTitle ? (
-                  <div className="project-row-focus">{project.currentStepTitle}</div>
-                ) : null}
-              </button>
-            ))}
-          </div>
-        </CollapsibleSection>
-      </aside>
+      <Sidebar
+        projects={state?.projects ?? []}
+        selectedRoot={selectedRoot}
+        reposOpen={reposOpen}
+        settingsOpen={settingsOpen}
+        watchedRootCount={state?.settings.watchedRoots.length ?? 0}
+        onSync={handleSync}
+        onToggleRepos={handleToggleRepos}
+        onSelectProject={handleProjectSelection}
+        onToggleSettings={handleToggleSettings}
+      />
 
       <main className="content">
         {loading ? <div className="empty-state">Loading state…</div> : null}
@@ -573,7 +1007,7 @@ export default function App() {
               className="inline-form"
               onSubmit={(event) => {
                 event.preventDefault();
-                void handleMutation(initProject(selectedSummary.root, initName || selectedSummary.name));
+                void handleInitProject();
               }}
             >
               <input
@@ -587,193 +1021,55 @@ export default function App() {
         ) : null}
 
         {!loading && detail ? (
-          <section className="workspace">
-            <section className="panel workspace-header">
-              <div>
-                <h2>{detail.manifest.name}</h2>
-                <p className="muted">{detail.manifest.root}</p>
-              </div>
-              <div className="workspace-header-meta">
-                <span>{completedCount}/{indexedPlan.length} complete</span>
-                <span>{activeSessions.length} active sessions</span>
-                <span>{formatRelativeTime(detail.runtime.last_updated_at)}</span>
-              </div>
-            </section>
-
-            <section className="workspace-grid">
-              <div className="workspace-main">
-                <section className="panel focus-panel">
-                  <div className="focus-head">
-                    <span className={`status status-${detail.runtime.status}`}>{detail.runtime.status}</span>
-                    {detail.runtime.active_branch ? (
-                      <span className="hero-branch">{detail.runtime.active_branch}</span>
-                    ) : null}
-                  </div>
-                  <h3>
-                    {currentStepEntry
-                      ? `${currentStepEntry.order}. ${currentStepEntry.step.title}`
-                      : 'No current step'}
-                  </h3>
-                  {currentStepEntry?.step.summary ? (
-                    <p className="focus-summary">{currentStepEntry.step.summary}</p>
-                  ) : null}
-                  <div className="focus-meta-grid">
-                    <div>
-                      <label>Owning session</label>
-                      <strong>{currentOwner?.title ?? 'Unowned'}</strong>
-                    </div>
-                    <div>
-                      <label>Next valid step</label>
-                      <strong>{nextStepEntry ? `${nextStepEntry.order}. ${nextStepEntry.step.title}` : 'None'}</strong>
-                    </div>
-                  </div>
-                  {detail.runtime.blockers.length > 0 ? (
-                    <div className="blocker-strip">
-                      {detail.runtime.blockers.map((blocker) => (
-                        <span className="blocker-chip" key={blocker}>
-                          {blocker}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-                </section>
-
-                <section className="panel plan-panel">
-                  <div className="panel-header">
-                    <h3>Plan</h3>
-                    <span className="muted">{indexedPlan.length} steps</span>
-                  </div>
-                  <div className="plan-list">
-                    {indexedPlan.map((entry) => {
-                      const owner = entry.step.owner_session_id
-                        ? sessionsById.get(entry.step.owner_session_id) ?? null
-                        : null;
-                      const isExpanded =
-                        expandedSteps[entry.step.id] ??
-                        entry.step.id === currentStepEntry?.step.id;
-                      const hasDetails = entry.step.details.length > 0 || entry.step.subtasks.length > 0;
-
-                      return (
-                        <article
-                          className={`plan-row ${entry.step.id === currentStepEntry?.step.id ? 'current' : ''} status-${entry.step.status}`}
-                          key={entry.step.id}
-                        >
-                          <button
-                            type="button"
-                            className="plan-row-main"
-                            onClick={() =>
-                              hasDetails
-                                ? setExpandedSteps((existing) => ({
-                                    ...existing,
-                                    [entry.step.id]: !isExpanded,
-                                  }))
-                                : undefined
-                            }
-                          >
-                            <span className="plan-order">{entry.order}</span>
-                            <div className="plan-copy">
-                              <div className="plan-row-head">
-                                <strong>{entry.step.title}</strong>
-                                <span className={`status status-${entry.step.status}`}>{entry.step.status}</span>
-                              </div>
-                              {entry.step.summary ? (
-                                <p className="plan-summary">{entry.step.summary}</p>
-                              ) : null}
-                              <div className="plan-row-meta">
-                                <span>{entry.phase.title}</span>
-                                <span>{owner?.title ?? 'No owner'}</span>
-                              </div>
-                            </div>
-                            {hasDetails ? <span className="plan-row-toggle">{isExpanded ? '−' : '+'}</span> : null}
-                          </button>
-                          {hasDetails && isExpanded ? (
-                            <div className="plan-row-details">
-                              {entry.step.details.length > 0 ? (
-                                <ul className="detail-list">
-                                  {entry.step.details.map((detailLine) => (
-                                    <li key={detailLine}>{detailLine}</li>
-                                  ))}
-                                </ul>
-                              ) : null}
-                              {entry.step.subtasks.length > 0 ? (
-                                <div className="subtask-list">
-                                  {entry.step.subtasks.map((subtask) => (
-                                    <div className="subtask-row" key={subtask.id}>
-                                      <span className={`subtask-state subtask-${subtask.status}`} />
-                                      <span>{subtask.title}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : null}
-                            </div>
-                          ) : null}
-                        </article>
-                      );
-                    })}
-                  </div>
-                </section>
-              </div>
-
-              <aside className="workspace-side">
-                {detail.sessions.length > 0 ? (
-                  <section className="panel session-panel">
-                    <div className="panel-header">
-                      <h3>Sessions</h3>
-                    </div>
-                    {(['active', 'paused', 'done'] as const).map((groupKey) =>
-                      groupedSessions[groupKey].length > 0 ? (
-                        <div className="session-group" key={groupKey}>
-                          <label>{groupKey}</label>
-                          <div className="session-list">
-                            {groupedSessions[groupKey].map((session) => (
-                              <div className="session-row" key={session.id}>
-                                <div>
-                                  <strong>{session.title}</strong>
-                                  <p className="muted">
-                                    {session.actor}/{session.source}
-                                  </p>
-                                </div>
-                                <div className="session-row-meta">
-                                  <span>{session.owned_step_id ? sessionsById.has(session.id) ? indexedPlan.find((entry) => entry.step.id === session.owned_step_id)?.step.title ?? session.owned_step_id : session.owned_step_id : 'No owned step'}</span>
-                                  <span>{formatRelativeTime(session.last_updated_at)}</span>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null,
-                    )}
-                  </section>
-                ) : null}
-
-                {timeline.length > 0 ? (
-                  <section className="panel timeline-panel">
-                    <div className="panel-header">
-                      <h3>Timeline</h3>
-                    </div>
-                    <div className="timeline-list">
-                      {timeline.slice(0, 12).map((event) => (
-                        <div className="timeline-row" key={`${event.timestamp}-${event.summary}`}>
-                          <div className="timeline-row-head">
-                            <strong>{event.summary}</strong>
-                            <span>{formatRelativeTime(event.timestamp)}</span>
-                          </div>
-                          <div className="timeline-row-meta">
-                            <span>{timelineLabel(event, sessionsById)}</span>
-                            {event.step_id ? (
-                              <span>{indexedPlan.find((entry) => entry.step.id === event.step_id)?.step.title ?? event.step_id}</span>
-                            ) : null}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </section>
-                ) : null}
-              </aside>
-            </section>
-          </section>
+          <WorkspaceView
+            detail={detail}
+            completedCount={completedCount}
+            indexedPlan={indexedPlan}
+            activeSessionCount={activeSessionCount}
+            currentOwner={currentOwner}
+            currentStepEntry={currentStepEntry}
+            nextStepEntry={nextStepEntry}
+            expandedSteps={expandedSteps}
+            sessionsById={sessionsById}
+            groupedSessions={groupedSessions}
+            timeline={timeline}
+            stepTitlesById={stepTitlesById}
+            onToggleStep={handleTogglePlanStep}
+          />
         ) : null}
+        {!loading && !detail && detailLoading ? <div className="empty-state">Loading project…</div> : null}
       </main>
+
+      {settingsOpen ? (
+        <Suspense fallback={null}>
+          <LazySettingsModal
+            settingsOpen={settingsOpen}
+            onClose={handleCloseSettings}
+            watchedRoots={state?.settings.watchedRoots ?? []}
+            rootsOpen={rootsOpen}
+            onToggleRoots={handleToggleRoots}
+            watchRootInput={watchRootInput}
+            watchRootError={watchRootError}
+            watchRootPending={watchRootPending}
+            onWatchRootInputChange={handleWatchRootInputChange}
+            onAddWatchRoot={() => void handleAddWatchRoot()}
+            onRemoveWatchRoot={(root) => void handleRemoveWatchRoot(root)}
+            bridgeOpen={bridgeOpen}
+            onToggleBridge={handleToggleBridge}
+            bridgeEnabled={Boolean(state?.settings.mcp.enabled)}
+            onBridgeToggle={(enabled) => void handleBridgeToggle(enabled)}
+            bridgeStatus={bridgeStatus}
+            bridgeUrl={bridgeUrl}
+            maskedToken={maskedToken}
+            setupStale={Boolean(state?.mcpRuntime.setupStale)}
+            staleClientNames={staleClientNames}
+            bridgeLastError={state?.mcpRuntime.lastError ?? null}
+            onRestartBridge={() => void handleRestartBridge()}
+            onRegenerateBridgeToken={() => void handleRegenerateBridgeToken()}
+            onCopyBridgeSnippet={(kind) => void handleCopyBridgeSnippet(kind)}
+          />
+        </Suspense>
+      ) : null}
     </div>
   );
 }

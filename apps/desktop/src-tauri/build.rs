@@ -3,6 +3,23 @@ use std::{
     path::{Path, PathBuf},
 };
 
+fn copy_if_changed(from: &Path, to: &Path) {
+    let should_copy = match fs::read(to) {
+        Ok(existing) => fs::read(from).map(|next| next != existing).unwrap_or(true),
+        Err(_) => true,
+    };
+
+    if should_copy {
+        fs::copy(from, to).unwrap_or_else(|error| {
+            panic!(
+                "failed to copy sidecar from {} to {}: {error}",
+                from.display(),
+                to.display()
+            )
+        });
+    }
+}
+
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("missing CARGO_MANIFEST_DIR"));
     let workspace_root = manifest_dir
@@ -38,13 +55,7 @@ fn main() {
     };
 
     if built_binary.exists() {
-        fs::copy(&built_binary, &bundled_binary).unwrap_or_else(|error| {
-            panic!(
-                "failed to copy sidecar from {} to {}: {error}",
-                built_binary.display(),
-                bundled_binary.display()
-            )
-        });
+        copy_if_changed(&built_binary, &bundled_binary);
     } else {
         println!(
             "cargo:warning=projectctl sidecar binary missing at {}; run the Tauri beforeDev/beforeBuild command first",

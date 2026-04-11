@@ -315,6 +315,9 @@ pub async fn run_serve_http(config: ServeHttpConfig) -> Result<()> {
         token: config.token,
     };
 
+    println!("AGENT_BRIDGE_READY {bound_port}");
+    let _ = io::stdout().flush();
+
     let router = Router::new()
         .route("/health", get(handle_health))
         .route("/mcp", post(handle_mcp))
