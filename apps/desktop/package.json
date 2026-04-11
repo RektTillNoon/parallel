@@ -1,0 +1,25 @@
+{
+  "name": "@parallel/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 1420",
+    "build": "vite build",
+    "test": "vitest run",
+    "pretauri": "pnpm --dir ../.. --filter @parallel/workflow-core build && pnpm --dir ../.. --filter @parallel/projectctl build",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.8.0",
+    "motion": "^12.38.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.8.0",
+    "@vitejs/plugin-react": "^5.0.2",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.7"
+  }
+}

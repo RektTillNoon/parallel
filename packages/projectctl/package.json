@@ -1,0 +1,17 @@
+{
+  "name": "@parallel/projectctl",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "projectctl": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsup --config tsup.config.ts",
+    "test": "node -e \"process.exit(0)\""
+  },
+  "dependencies": {
+    "@parallel/workflow-core": "workspace:*"
+  }
+}

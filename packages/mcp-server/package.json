@@ -1,0 +1,16 @@
+{
+  "name": "@parallel/mcp-server",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs --dts",
+    "test": "node -e \"process.exit(0)\""
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.0.0-alpha.2",
+    "@parallel/workflow-core": "workspace:*",
+    "zod": "^4.1.8"
+  }
+}

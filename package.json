@@ -1,0 +1,22 @@
+{
+  "name": "parallel",
+  "private": true,
+  "packageManager": "pnpm@10.33.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "dev:desktop": "pnpm --filter @parallel/desktop tauri dev",
+    "build:desktop": "pnpm --filter @parallel/desktop tauri build"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "tsup": "^8.5.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

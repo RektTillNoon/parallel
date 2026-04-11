@@ -1,0 +1,18 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>parallel app icon</title>
+  <desc>ASCII-inspired terminal icon with a prompt, parallel bars, and cursor.</desc>
+  <rect x="36" y="36" width="440" height="440" rx="104" fill="#F5F5F5"/>
+  <rect x="36" y="36" width="440" height="440" rx="104" stroke="#111111" stroke-width="24"/>
+  <path d="M84 144H428" stroke="#111111" stroke-width="20" stroke-linecap="round"/>
+  <rect x="88" y="86" width="30" height="30" rx="15" fill="#D71921"/>
+  <path
+    d="M144 250L196 284L144 318"
+    stroke="#D71921"
+    stroke-width="24"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <rect x="244" y="212" width="32" height="132" rx="12" fill="#111111"/>
+  <rect x="308" y="212" width="32" height="132" rx="12" fill="#111111"/>
+  <rect x="224" y="376" width="140" height="22" rx="11" fill="#D71921"/>
+</svg>
