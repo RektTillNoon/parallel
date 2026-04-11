@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 
-import type { LoadStatePayload, ProjectDetail } from './types';
+import type { BridgeSnippet, LoadStatePayload, ProjectDetail } from './types';
 
 async function invokeJson<T>(command: string, args?: Record<string, unknown>) {
   const payload = await invoke<string>(command, args);
@@ -70,4 +70,20 @@ export async function proposeDecision(
   payload: { title: string; context: string; decision: string; impact: string },
 ) {
   return invokeJson<ProjectDetail>('propose_decision_cmd', { root, ...payload });
+}
+
+export async function setBridgeEnabled(enabled: boolean) {
+  return invokeJson<LoadStatePayload>('set_bridge_enabled', { payload: { enabled } });
+}
+
+export async function restartBridge() {
+  return invokeJson<LoadStatePayload>('restart_bridge_cmd');
+}
+
+export async function regenerateBridgeToken() {
+  return invokeJson<LoadStatePayload>('regenerate_bridge_token');
+}
+
+export async function getBridgeClientSnippets(kind: string) {
+  return invokeJson<BridgeSnippet[]>('get_bridge_client_snippets', { args: { kind } });
 }

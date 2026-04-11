@@ -292,7 +292,8 @@ label {
 .project-list,
 .timeline-list,
 .session-list,
-.subtask-list {
+.subtask-list,
+.bridge-copy-list {
   display: grid;
   gap: 0.35rem;
 }
@@ -612,6 +613,50 @@ label {
 .inline-error {
   color: var(--accent);
   font-size: 0.82rem;
+}
+
+.bridge-panel {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.toggle-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.toggle-row input {
+  width: auto;
+}
+
+.bridge-meta {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.bridge-url {
+  display: block;
+  margin-top: 0.18rem;
+  font-size: 0.8rem;
+  white-space: normal;
+  word-break: break-all;
+}
+
+.bridge-warning {
+  padding: 0.55rem 0.7rem;
+  border-radius: 12px;
+  background: rgba(197, 146, 38, 0.08);
+  border: 1px solid rgba(197, 146, 38, 0.24);
+  color: var(--amber);
+  font-family: "Space Mono", monospace;
+  font-size: 0.78rem;
+}
+
+.bridge-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
 }
 
 h1,

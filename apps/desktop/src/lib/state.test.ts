@@ -7,6 +7,11 @@ const baseState: LoadStatePayload = {
   settings: {
     watchedRoots: ['/Users/light/Projects'],
     lastFocusedProject: null,
+    mcp: {
+      enabled: false,
+      port: 4855,
+      token: '',
+    },
   },
   projects: [
     {
@@ -23,12 +28,26 @@ const baseState: LoadStatePayload = {
       currentStepId: null,
       currentStepTitle: null,
       blockerCount: 0,
+      totalStepCount: 0,
+      completedStepCount: 0,
+      activeSessionCount: 0,
+      focusSessionId: null,
       lastUpdatedAt: null,
       nextAction: 'Initialize workflow metadata',
       activeBranch: 'main',
       pendingProposalCount: 0,
     },
   ],
+  mcpRuntime: {
+    status: 'stopped',
+    boundPort: null,
+    pid: null,
+    startedAt: null,
+    lastError: null,
+    setupStale: false,
+    staleReasons: [],
+    staleClients: [],
+  },
 };
 
 describe('resolveSelectionState', () => {

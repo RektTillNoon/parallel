@@ -1,3 +1,5 @@
+mod mcp;
+
 use std::{env, path::PathBuf, process};
 
 use anyhow::{anyhow, bail, Result};
@@ -225,6 +227,46 @@ fn run() -> Result<()> {
     let index_db_path = resolve_index_db(&parsed);
 
     match command.as_deref() {
+        Some("mcp") => match subcommand.as_deref() {
+            Some("serve-http") => {
+                let port = required_flag(&parsed, "port")?.parse::<u16>()?;
+                let token = required_flag(&parsed, "token")?;
+                let watched_roots = flag(&parsed, "roots")
+                    .map(|raw| {
+                        raw.split(',')
+                            .map(str::trim)
+                            .filter(|root| !root.is_empty())
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                    })
+                    .or_else(|| {
+                        env::var("PROJECT_WORKFLOW_WATCH_ROOTS").ok().map(|raw| {
+                            raw.split(if cfg!(windows) { ';' } else { ':' })
+                                .map(str::trim)
+                                .filter(|root| !root.is_empty())
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>()
+                        })
+                    })
+                    .unwrap_or_default();
+
+                let runtime = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()?;
+                runtime.block_on(mcp::run_serve_http(mcp::ServeHttpConfig {
+                    port,
+                    token,
+                    watched_roots,
+                    index_db_path,
+                }))
+            }
+            Some("proxy-stdio") => {
+                let url = required_flag(&parsed, "url")?;
+                let token = required_flag(&parsed, "token")?;
+                mcp::run_proxy_stdio(mcp::ProxyStdioConfig { url, token })
+            }
+            _ => bail!("Unknown mcp subcommand \"{}\"", subcommand.unwrap_or_default()),
+        },
         Some("init") => {
             let project = init_project(InitProjectInput {
                 root: resolve_root(&parsed),
@@ -419,7 +461,9 @@ fn run() -> Result<()> {
                 "projectctl blocker clear [summary] [--root PATH]",
                 "projectctl note add <summary> [--root PATH]",
                 "projectctl handoff refresh [--root PATH]",
-                "projectctl decision propose --title TITLE --context TEXT --decision TEXT --impact TEXT [--root PATH]"
+                "projectctl decision propose --title TITLE --context TEXT --decision TEXT --impact TEXT [--root PATH]",
+                "projectctl mcp serve-http --port PORT --token TOKEN",
+                "projectctl mcp proxy-stdio --url URL --token TOKEN"
               ]
             });
             print_result(&commands, true)?;

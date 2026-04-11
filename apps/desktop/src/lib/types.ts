@@ -1,6 +1,39 @@
 export interface SettingsPayload {
   watchedRoots: string[];
   lastFocusedProject: string | null;
+  mcp: BridgeSettings;
+}
+
+export interface BridgeSettings {
+  enabled: boolean;
+  port: number;
+  token: string;
+}
+
+export interface BridgeRuntime {
+  status: string;
+  boundPort: number | null;
+  pid: number | null;
+  startedAt: string | null;
+  lastError: string | null;
+  setupStale: boolean;
+  staleReasons: string[];
+  staleClients: string[];
+}
+
+export interface BridgeSnippet {
+  kind: string;
+  label: string;
+  content: string;
+  copyLabel: string;
+  notes: string;
+  stale: boolean;
+}
+
+export interface BridgeStateEvent {
+  reason: string;
+  mcp: BridgeSettings;
+  mcpRuntime: BridgeRuntime;
 }
 
 export interface ProjectSummary {
@@ -136,4 +169,5 @@ export interface ProjectDetail {
 export interface LoadStatePayload {
   settings: SettingsPayload;
   projects: ProjectSummary[];
+  mcpRuntime: BridgeRuntime;
 }

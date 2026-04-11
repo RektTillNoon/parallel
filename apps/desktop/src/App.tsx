@@ -4,15 +4,20 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 
 import {
   addWatchRoot,
+  getBridgeClientSnippets,
   getProject,
   initProject,
   loadState,
+  regenerateBridgeToken,
   removeWatchRoot,
+  restartBridge,
+  setBridgeEnabled,
   setLastFocusedProject,
 } from './lib/api';
 import { resolveSelectionState } from './lib/state';
 import type {
   ActivityEvent,
+  BridgeStateEvent,
   LoadStatePayload,
   Phase,
   ProjectDetail,
@@ -159,6 +164,7 @@ export default function App() {
   const [watchRootPending, setWatchRootPending] = useState(false);
   const [initName, setInitName] = useState('');
   const [rootsOpen, setRootsOpen] = useState(false);
+  const [bridgeOpen, setBridgeOpen] = useState(true);
   const [reposOpen, setReposOpen] = useState(true);
   const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
 
@@ -191,9 +197,24 @@ export default function App() {
     const unlistenPromise = listen('workflow://changed', () => {
       void reloadState(selectedRoot);
     });
+    const bridgePromise = listen<BridgeStateEvent>('bridge://state-changed', (event) => {
+      setState((current) =>
+        current
+          ? {
+              ...current,
+              settings: {
+                ...current.settings,
+                mcp: event.payload.mcp,
+              },
+              mcpRuntime: event.payload.mcpRuntime,
+            }
+          : current,
+      );
+    });
 
     return () => {
       void unlistenPromise.then((unlisten) => unlisten());
+      void bridgePromise.then((unlisten) => unlisten());
     };
   }, []);
 
@@ -323,6 +344,57 @@ export default function App() {
     }
   }
 
+  async function handleBridgeToggle(enabled: boolean) {
+    setError(null);
+    try {
+      const nextState = await setBridgeEnabled(enabled);
+      setState(nextState);
+    } catch (mutationError) {
+      setError(mutationError instanceof Error ? mutationError.message : String(mutationError));
+    }
+  }
+
+  async function handleCopyBridgeSnippet(kind: string) {
+    setError(null);
+    try {
+      const snippets = await getBridgeClientSnippets(kind);
+      const [snippet] = snippets;
+      if (!snippet) {
+        throw new Error(`No snippet returned for ${kind}`);
+      }
+      await navigator.clipboard.writeText(snippet.content);
+      setState((current) =>
+        current
+          ? {
+              ...current,
+              mcpRuntime: {
+                ...current.mcpRuntime,
+                staleClients: current.mcpRuntime.staleClients.filter((candidate) => candidate !== kind),
+                setupStale: current.mcpRuntime.staleClients.some((candidate) => candidate !== kind),
+                staleReasons:
+                  current.mcpRuntime.staleClients.filter((candidate) => candidate !== kind).length > 0
+                    ? current.mcpRuntime.staleReasons
+                    : [],
+              },
+            }
+          : current,
+      );
+    } catch (mutationError) {
+      setError(mutationError instanceof Error ? mutationError.message : String(mutationError));
+    }
+  }
+
+  const bridgePort = state?.mcpRuntime.boundPort ?? state?.settings.mcp.port ?? null;
+  const bridgeUrl = bridgePort ? `http://127.0.0.1:${bridgePort}/mcp` : 'Not configured';
+  const maskedToken = state?.settings.mcp.token
+    ? `${state.settings.mcp.token.slice(0, 6)}••••${state.settings.mcp.token.slice(-4)}`
+    : 'Not generated';
+  const staleClientLabels = {
+    codex: 'Codex',
+    claudeCode: 'Claude Code',
+    claudeDesktop: 'Claude Desktop',
+  } as const;
+
   return (
     <div className="shell">
       <aside className="sidebar">
@@ -378,6 +450,76 @@ export default function App() {
             </div>
           </CollapsibleSection>
         </div>
+        <CollapsibleSection
+          label="Agent Bridge"
+          open={bridgeOpen}
+          onToggle={() => setBridgeOpen((open) => !open)}
+          className="sidebar-block bridge-toggle"
+        >
+          <section className="panel bridge-panel">
+            <div className="panel-header">
+              <h3>Agent Bridge</h3>
+              <label className="toggle-row">
+                <span>{state?.settings.mcp.enabled ? 'On' : 'Off'}</span>
+                <input
+                  type="checkbox"
+                  checked={Boolean(state?.settings.mcp.enabled)}
+                  onChange={(event) => void handleBridgeToggle(event.target.checked)}
+                />
+              </label>
+            </div>
+            <div className="bridge-meta">
+              <div>
+                <label>Status</label>
+                <strong className={`status status-${state?.mcpRuntime.status ?? 'stopped'}`}>
+                  {state?.mcpRuntime.status ?? 'stopped'}
+                </strong>
+              </div>
+              <div>
+                <label>URL</label>
+                <code className="bridge-url">{bridgeUrl}</code>
+              </div>
+              <div>
+                <label>Token</label>
+                <code className="bridge-url">{maskedToken}</code>
+              </div>
+            </div>
+            {state?.mcpRuntime.setupStale ? (
+              <div className="bridge-warning">
+                Re-copy setup for:{' '}
+                {state.mcpRuntime.staleClients
+                  .map((kind) => staleClientLabels[kind as keyof typeof staleClientLabels] ?? kind)
+                  .join(', ')}
+              </div>
+            ) : null}
+            {state?.mcpRuntime.lastError ? (
+              <div className="inline-error">{state.mcpRuntime.lastError}</div>
+            ) : null}
+            <div className="bridge-actions">
+              <button
+                type="button"
+                onClick={() => void handleMutation(restartBridge())}
+                disabled={!state?.settings.mcp.enabled}
+              >
+                Restart
+              </button>
+              <button type="button" onClick={() => void handleMutation(regenerateBridgeToken())}>
+                Regenerate token
+              </button>
+            </div>
+            <div className="bridge-copy-list">
+              <button type="button" onClick={() => void handleCopyBridgeSnippet('codex')}>
+                Copy Codex setup
+              </button>
+              <button type="button" onClick={() => void handleCopyBridgeSnippet('claudeCode')}>
+                Copy Claude Code setup
+              </button>
+              <button type="button" onClick={() => void handleCopyBridgeSnippet('claudeDesktop')}>
+                Copy Claude Desktop setup
+              </button>
+            </div>
+          </section>
+        </CollapsibleSection>
         <CollapsibleSection
           label="Repos"
           open={reposOpen}
