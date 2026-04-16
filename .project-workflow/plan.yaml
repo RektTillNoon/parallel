@@ -1,0 +1,16 @@
+version: 2
+phases:
+- id: define
+  title: Define
+  steps:
+  - id: capture-requirements
+    title: Capture requirements
+    summary: Write the initial problem statement and success criteria.
+    status: todo
+    depends_on: []
+    details:
+    - Write the initial problem statement and success criteria.
+    subtasks: []
+    owner_session_id: null
+    completed_at: null
+    completed_by: null
