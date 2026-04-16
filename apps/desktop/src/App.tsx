@@ -203,17 +203,6 @@ const Sidebar = memo(function Sidebar({
                 <strong>{project.name}</strong>
                 <span className="project-row-state">{compactProjectStatus(project.status)}</span>
               </div>
-              {project.initialized ? (
-                <div className="project-row-meta">
-                  <span>
-                    {project.completedStepCount}/{project.totalStepCount}
-                  </span>
-                  <span>{project.activeSessionCount} sessions</span>
-                </div>
-              ) : null}
-              {project.currentStepTitle ? (
-                <div className="project-row-focus">{project.currentStepTitle}</div>
-              ) : null}
             </button>
           ))}
         </div>
@@ -713,6 +702,7 @@ export default function App() {
                 <span>{board.rows.length} active</span>
                 <span>{state?.projects.filter((project) => project.blockerCount > 0).length ?? 0} blocked</span>
                 <span>{state?.projects.filter((project) => project.activeSessionCount > 0).length ?? 0} repos live</span>
+                <span>last activity {formatRelativeTime(board.rows[0]?.lastUpdatedAt)}</span>
               </div>
             </section>
 
@@ -726,6 +716,9 @@ export default function App() {
               <ContextRail
                 detail={selectedDetail}
                 currentStepTitle={selectedBoardRow?.stepTitle ?? 'No current step'}
+                currentStepSummary={
+                  selectedBoardRow?.summary ?? selectedDetail?.runtime.next_action ?? 'No step summary'
+                }
               />
             </section>
           </>

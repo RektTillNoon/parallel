@@ -62,4 +62,17 @@ describe('getRecentActivityEntries', () => {
       'Second',
     ]);
   });
+
+  it('pushes malformed timestamps behind valid activity', () => {
+    expect(
+      getRecentActivityEntries([
+        ...recentActivity,
+        {
+          ...recentActivity[0],
+          timestamp: 'not-a-date',
+          summary: 'Broken timestamp',
+        },
+      ]).map((event) => event.summary),
+    ).toEqual(['Fourth', 'Third', 'Second']);
+  });
 });

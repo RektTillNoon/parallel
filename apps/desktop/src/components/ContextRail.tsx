@@ -3,18 +3,28 @@ import { memo } from 'react';
 import type { ActivityEvent } from '../lib/types';
 import type { ProjectDetail } from '../lib/types';
 
+function toSortTimestamp(value: string) {
+  const timestamp = Date.parse(value);
+  return Number.isNaN(timestamp) ? Number.NEGATIVE_INFINITY : timestamp;
+}
+
 export function getRecentActivityEntries(recentActivity: ActivityEvent[]) {
   return [...recentActivity]
-    .sort((left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp))
+    .sort((left, right) => toSortTimestamp(right.timestamp) - toSortTimestamp(left.timestamp))
     .slice(0, 3);
 }
 
 type ContextRailProps = {
   detail: ProjectDetail | null;
   currentStepTitle: string;
+  currentStepSummary: string;
 };
 
-export default memo(function ContextRail({ detail, currentStepTitle }: ContextRailProps) {
+export default memo(function ContextRail({
+  detail,
+  currentStepTitle,
+  currentStepSummary,
+}: ContextRailProps) {
   if (!detail) {
     return null;
   }
@@ -29,13 +39,15 @@ export default memo(function ContextRail({ detail, currentStepTitle }: ContextRa
       <section>
         <p className="context-rail-label">Current step</p>
         <h3>{currentStepTitle}</h3>
-        <p>{detail.runtime.next_action}</p>
+        <p>{currentStepSummary}</p>
       </section>
       <section>
         <p className="context-rail-label">Recent activity</p>
         <div className="context-activity-list">
-          {getRecentActivityEntries(detail.recentActivity).map((event) => (
-            <article key={`${event.timestamp}-${event.summary}`}>
+          {getRecentActivityEntries(detail.recentActivity).map((event, index) => (
+            <article
+              key={`${event.timestamp}-${event.actor}-${event.type}-${event.session_id ?? 'none'}-${event.step_id ?? 'none'}-${index}`}
+            >
               <strong>{event.summary}</strong>
             </article>
           ))}

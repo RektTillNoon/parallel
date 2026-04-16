@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { choosePrimaryBoardRow, resolveSelectedSessionId } from './App';
+import {
+  choosePrimaryBoardRow,
+  resolveBoardSelectionFromRow,
+  resolveSelectedSessionId,
+} from './App';
 import type { SessionBoardData } from './lib/session-board';
 
 const board: SessionBoardData = {
@@ -64,5 +68,14 @@ describe('choosePrimaryBoardRow', () => {
     const row = choosePrimaryBoardRow(board, '/Users/light/Projects/ghost', 'session-1');
 
     expect(resolveSelectedSessionId(row)).toBeNull();
+  });
+});
+
+describe('resolveBoardSelectionFromRow', () => {
+  it('keeps repo and session selection aligned to the clicked ledger row', () => {
+    expect(resolveBoardSelectionFromRow(board.rows[1])).toEqual({
+      selectedRoot: '/Users/light/Projects/notes',
+      selectedSessionId: 'session-2',
+    });
   });
 });
