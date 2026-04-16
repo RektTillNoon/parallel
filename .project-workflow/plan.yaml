@@ -6,11 +6,11 @@ phases:
   - id: capture-requirements
     title: Capture requirements
     summary: Write the initial problem statement and success criteria.
-    status: todo
+    status: in_progress
     depends_on: []
     details:
     - Write the initial problem statement and success criteria.
     subtasks: []
-    owner_session_id: null
+    owner_session_id: validate-agent-bridge-from-codex-f382a070
     completed_at: null
     completed_by: null

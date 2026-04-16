@@ -6,4 +6,5 @@ target
 src-tauri/target
 *.tsbuildinfo
 
-.project-workflow/local/
+.project-workflow/
+.superpowers/
