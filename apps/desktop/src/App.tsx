@@ -147,6 +147,32 @@ function formatRelativeTime(value: string | null | undefined) {
   return relativeTimeFormatter.format(Math.round(diffMs / 86400000), 'day');
 }
 
+export function formatShortDuration(value: string | null | undefined) {
+  if (!value) {
+    return '—';
+  }
+
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) {
+    return '—';
+  }
+
+  const diffMinutes = Math.max(0, Math.round((Date.now() - timestamp) / 60000));
+  if (diffMinutes < 1) return 'now';
+  if (diffMinutes < 60) return `${diffMinutes}m`;
+  const hours = Math.round(diffMinutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.round(hours / 24);
+  if (days < 7) return `${days}d`;
+  const weeks = Math.round(days / 7);
+  if (weeks < 5) return `${weeks}w`;
+  return `${Math.round(days / 30)}mo`;
+}
+
+function padCount(value: number) {
+  return value < 10 ? `0${value}` : String(value);
+}
+
 type SidebarProps = {
   projects: ProjectSummary[];
   selectedRoot: string | null;
@@ -200,7 +226,14 @@ const Sidebar = memo(function Sidebar({
               onClick={() => onSelectProject(project)}
             >
               <div className="project-row-head">
-                <strong>{project.name}</strong>
+                <span className="project-row-lead">
+                  <span
+                    className="project-status-dot"
+                    data-status={project.status}
+                    aria-hidden="true"
+                  />
+                  <strong>{project.name}</strong>
+                </span>
                 <span className="project-row-state">{compactProjectStatus(project.status)}</span>
               </div>
             </button>
@@ -696,14 +729,26 @@ export default function App() {
             <section className="board-topline">
               <div>
                 <h2>Active sessions</h2>
-                <p className="muted">Cross-repo board. Selected repo detail is secondary.</p>
+                <p className="muted">Live log of work in motion across watched repos.</p>
               </div>
-              <div className="board-stats">
-                <span>{board.rows.length} active</span>
-                <span>{state?.projects.filter((project) => project.blockerCount > 0).length ?? 0} blocked</span>
-                <span>{state?.projects.filter((project) => project.activeSessionCount > 0).length ?? 0} repos live</span>
-                <span>last activity {formatRelativeTime(board.rows[0]?.lastUpdatedAt)}</span>
-              </div>
+              <dl className="board-metrics" aria-label="Board totals">
+                <div>
+                  <dd>{padCount(board.rows.length)}</dd>
+                  <dt>Active</dt>
+                </div>
+                <div>
+                  <dd>{padCount(state?.projects.filter((project) => project.blockerCount > 0).length ?? 0)}</dd>
+                  <dt>Blocked</dt>
+                </div>
+                <div>
+                  <dd>{padCount(state?.projects.filter((project) => project.activeSessionCount > 0).length ?? 0)}</dd>
+                  <dt>Repos live</dt>
+                </div>
+                <div>
+                  <dd className="board-metrics-time">{formatShortDuration(board.rows[0]?.lastUpdatedAt)}</dd>
+                  <dt>Last touch</dt>
+                </div>
+              </dl>
             </section>
 
             <section className="session-board-layout">

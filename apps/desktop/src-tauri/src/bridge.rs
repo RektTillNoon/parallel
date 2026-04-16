@@ -114,24 +114,41 @@ pub fn sidecar_binary_filename() -> String {
     format!("projectctl-{}{}", target_triple(), extension)
 }
 
+pub fn bundled_sidecar_binary_filename() -> String {
+    let extension = if cfg!(target_os = "windows") { ".exe" } else { "" };
+    format!("projectctl{extension}")
+}
+
 pub fn resolve_bundled_projectctl_path(current_exe: &Path) -> PathBuf {
+    resolve_bundled_projectctl_path_with_manifest_dir(current_exe, Path::new(env!("CARGO_MANIFEST_DIR")))
+}
+
+fn resolve_bundled_projectctl_path_with_manifest_dir(
+    current_exe: &Path,
+    manifest_dir: &Path,
+) -> PathBuf {
+    let bundled_binary_name = bundled_sidecar_binary_filename();
     let binary_name = sidecar_binary_filename();
-    let sibling = current_exe
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(&binary_name);
-    if sibling.exists() {
-        return sibling;
+    let parent = current_exe.parent().unwrap_or_else(|| Path::new("."));
+
+    let packaged_sibling = parent.join(&bundled_binary_name);
+    if packaged_sibling.exists() {
+        return packaged_sibling;
     }
 
-    let dev_binary = Path::new(env!("CARGO_MANIFEST_DIR"))
+    let target_suffixed_sibling = parent.join(&binary_name);
+    if target_suffixed_sibling.exists() {
+        return target_suffixed_sibling;
+    }
+
+    let dev_binary = manifest_dir
         .join("binaries")
         .join(&binary_name);
     if dev_binary.exists() {
         return dev_binary;
     }
 
-    sibling
+    packaged_sibling
 }
 
 pub fn mark_clients_stale(snapshot: &mut BridgeRuntimeSnapshot, reason: &str) {
@@ -217,6 +234,18 @@ pub fn build_client_snippet(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{fs, time::{SystemTime, UNIX_EPOCH}};
+
+    fn unique_test_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "parallel-bridge-{name}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time before unix epoch")
+                .as_nanos()
+        ))
+    }
 
     #[test]
     fn marks_all_clients_stale() {
@@ -237,5 +266,43 @@ mod tests {
         clear_client_stale(&mut snapshot, "claudeDesktop");
         assert!(!snapshot.setup_stale);
         assert!(snapshot.stale_reasons.is_empty());
+    }
+
+    #[test]
+    fn prefers_packaged_projectctl_sibling_for_bundled_apps() {
+        let root = unique_test_dir("packaged-sibling");
+        let contents_dir = root.join("parallel.app/Contents/MacOS");
+        fs::create_dir_all(&contents_dir).expect("create contents dir");
+        let current_exe = contents_dir.join("parallel");
+        fs::write(&current_exe, "").expect("create current exe");
+
+        let packaged_sidecar = contents_dir.join(bundled_sidecar_binary_filename());
+        fs::write(&packaged_sidecar, "").expect("create packaged sidecar");
+
+        let resolved = resolve_bundled_projectctl_path_with_manifest_dir(&current_exe, &root.join("src-tauri"));
+        assert_eq!(resolved, packaged_sidecar);
+
+        fs::remove_dir_all(&root).expect("remove temp test dir");
+    }
+
+    #[test]
+    fn falls_back_to_target_suffixed_dev_binary_when_packaged_sidecar_is_missing() {
+        let root = unique_test_dir("dev-fallback");
+        let run_dir = root.join("target/debug");
+        let manifest_dir = root.join("src-tauri");
+        let binaries_dir = manifest_dir.join("binaries");
+        fs::create_dir_all(&run_dir).expect("create run dir");
+        fs::create_dir_all(&binaries_dir).expect("create binaries dir");
+
+        let current_exe = run_dir.join("parallel-desktop");
+        fs::write(&current_exe, "").expect("create current exe");
+
+        let dev_binary = binaries_dir.join(sidecar_binary_filename());
+        fs::write(&dev_binary, "").expect("create dev sidecar");
+
+        let resolved = resolve_bundled_projectctl_path_with_manifest_dir(&current_exe, &manifest_dir);
+        assert_eq!(resolved, dev_binary);
+
+        fs::remove_dir_all(&root).expect("remove temp test dir");
     }
 }
