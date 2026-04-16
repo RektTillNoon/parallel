@@ -31,6 +31,13 @@ import {
   runBootstrapTasks,
   shouldReconcileBridgeStatus,
 } from './lib/state';
+import {
+  buildSessionBoard,
+  chooseBoardSelection,
+  type BoardProjectDetailMap,
+  type SessionBoardData,
+  type SessionBoardRow,
+} from './lib/session-board';
 import CollapsibleSection from './components/CollapsibleSection';
 import type {
   ActivityEvent,
@@ -51,6 +58,29 @@ type IndexedPlanStep = {
 
 type SessionGroups = Record<'active' | 'paused' | 'done', WorkflowSession[]>;
 
+const emptyLoadState: LoadStatePayload = {
+  settings: {
+    watchedRoots: [],
+    lastFocusedProject: null,
+    mcp: {
+      enabled: false,
+      port: 4855,
+      token: '',
+    },
+  },
+  projects: [],
+  mcpRuntime: {
+    status: 'stopped',
+    boundPort: null,
+    pid: null,
+    startedAt: null,
+    lastError: null,
+    setupStale: false,
+    staleReasons: [],
+    staleClients: [],
+  },
+};
+
 const relativeTimeFormatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
 const LazySettingsModal = lazy(() => import('./components/SettingsModal'));
 const staleClientLabels = {
@@ -58,6 +88,26 @@ const staleClientLabels = {
   claudeCode: 'Claude Code',
   claudeDesktop: 'Claude Desktop',
 } as const;
+
+export function choosePrimaryBoardRow(
+  board: SessionBoardData,
+  selectedRoot: string | null,
+  selectedSessionId: string | null,
+): SessionBoardRow | null {
+  if (selectedRoot) {
+    return (
+      board.rows.find(
+        (row) => row.repoRoot === selectedRoot && row.sessionId === selectedSessionId,
+      ) ?? board.rows.find((row) => row.repoRoot === selectedRoot) ?? null
+    );
+  }
+
+  return chooseBoardSelection(board, selectedSessionId);
+}
+
+export function resolveSelectedSessionId(selectedBoardRow: SessionBoardRow | null) {
+  return selectedBoardRow?.sessionId ?? null;
+}
 
 function compactProjectStatus(status: ProjectSummary['status']) {
   switch (status) {
@@ -500,7 +550,8 @@ const WorkspaceView = memo(function WorkspaceView({
 export default function App() {
   const [state, setState] = useState<LoadStatePayload | null>(null);
   const [selectedRoot, setSelectedRoot] = useState<string | null>(null);
-  const [detail, setDetail] = useState<ProjectDetail | null>(null);
+  const [detailMap, setDetailMap] = useState<BoardProjectDetailMap>(new Map());
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -521,38 +572,58 @@ export default function App() {
     selectedRootRef.current = selectedRoot;
   }, [selectedRoot]);
 
+  const loadBoardDetails = useCallback(async (nextState: LoadStatePayload, selectedRootCandidate: string | null) => {
+    const rootsToLoad = new Set<string>();
+
+    for (const project of nextState.projects) {
+      if (project.initialized && project.activeSessionCount > 0) {
+        rootsToLoad.add(project.root);
+      }
+    }
+
+    if (selectedRootCandidate) {
+      const selectedProject =
+        nextState.projects.find((project) => project.root === selectedRootCandidate) ?? null;
+      if (selectedProject?.initialized) {
+        rootsToLoad.add(selectedRootCandidate);
+      }
+    }
+
+    if (rootsToLoad.size === 0) {
+      setDetailMap(new Map());
+      setDetailLoading(false);
+      return;
+    }
+
+    setDetailLoading(true);
+    try {
+      const settledEntries = await Promise.allSettled(
+        [...rootsToLoad].map(async (root) => [root, await getProject(root)] as const),
+      );
+      const entries: Array<readonly [string, ProjectDetail]> = [];
+
+      for (const result of settledEntries) {
+        if (result.status === 'fulfilled') {
+          entries.push(result.value);
+        } else {
+          setError(result.reason instanceof Error ? result.reason.message : String(result.reason));
+        }
+      }
+
+      setDetailMap(new Map(entries));
+    } finally {
+      setDetailLoading(false);
+    }
+  }, []);
+
   const applyLoadState = useCallback(
-    async (
-      nextState: LoadStatePayload,
-      options?: {
-        selectRoot?: string | null;
-        preserveDetail?: boolean;
-      },
-    ) => {
+    async (nextState: LoadStatePayload, options?: { selectRoot?: string | null }) => {
       setState(nextState);
       const selection = resolveSelectionState(nextState, options?.selectRoot ?? selectedRootRef.current);
       setSelectedRoot(selection.selectedRoot);
-
-      if (!selection.shouldLoadDetail || !selection.selectedRoot) {
-        setDetail(null);
-        setDetailLoading(false);
-        return;
-      }
-
-      if (options?.preserveDetail && detail?.manifest.root === selection.selectedRoot) {
-        return;
-      }
-
-      setDetailLoading(true);
-      try {
-        setDetail(await getProject(selection.selectedRoot));
-      } catch (loadError) {
-        setError(loadError instanceof Error ? loadError.message : String(loadError));
-      } finally {
-        setDetailLoading(false);
-      }
+      await loadBoardDetails(nextState, selection.selectedRoot);
     },
-    [detail?.manifest.root],
+    [loadBoardDetails],
   );
 
   const reloadState = useCallback(
@@ -687,9 +758,25 @@ export default function App() {
     return state?.projects.find((project) => project.root === selectedRoot) ?? null;
   }, [selectedRoot, state?.projects]);
 
+  const board = useMemo(() => {
+    return buildSessionBoard(state ?? emptyLoadState, detailMap);
+  }, [detailMap, state]);
+
+  const selectedBoardRow = useMemo(() => {
+    return choosePrimaryBoardRow(board, selectedRoot, selectedSessionId);
+  }, [board, selectedRoot, selectedSessionId]);
+
+  useEffect(() => {
+    setSelectedSessionId(resolveSelectedSessionId(selectedBoardRow));
+  }, [selectedBoardRow]);
+
+  const selectedDetail = useMemo(() => {
+    return selectedBoardRow ? detailMap.get(selectedBoardRow.repoRoot) ?? null : null;
+  }, [detailMap, selectedBoardRow]);
+
   const indexedPlan = useMemo(() => {
-    return detail ? getIndexedPlan(detail.plan.phases) : [];
-  }, [detail]);
+    return selectedDetail ? getIndexedPlan(selectedDetail.plan.phases) : [];
+  }, [selectedDetail]);
 
   const planEntriesById = useMemo(() => {
     return new Map(indexedPlan.map((entry) => [entry.step.id, entry]));
@@ -704,11 +791,11 @@ export default function App() {
   }, [indexedPlan]);
 
   const currentStepEntry = useMemo(() => {
-    if (!detail) {
+    if (!selectedDetail) {
       return null;
     }
-    return planEntriesById.get(detail.runtime.current_step_id ?? '') ?? null;
-  }, [detail, planEntriesById]);
+    return planEntriesById.get(selectedDetail.runtime.current_step_id ?? '') ?? null;
+  }, [selectedDetail, planEntriesById]);
 
   const nextStepEntry = useMemo(() => {
     return indexedPlan.find(
@@ -720,8 +807,8 @@ export default function App() {
   }, [currentStepEntry?.step.id, indexedPlan, stepStatusById]);
 
   const sessionsById = useMemo(() => {
-    return new Map((detail?.sessions ?? []).map((session) => [session.id, session]));
-  }, [detail]);
+    return new Map((selectedDetail?.sessions ?? []).map((session) => [session.id, session]));
+  }, [selectedDetail]);
 
   const currentOwner = useMemo(() => {
     return currentStepEntry?.step.owner_session_id
@@ -736,12 +823,12 @@ export default function App() {
       done: [],
     };
 
-    for (const session of detail?.sessions ?? []) {
+    for (const session of selectedDetail?.sessions ?? []) {
       groups[session.status].push(session);
     }
 
     return groups;
-  }, [detail]);
+  }, [selectedDetail]);
 
   const activeSessionCount = groupedSessions.active.length;
 
@@ -750,8 +837,8 @@ export default function App() {
   }, [indexedPlan]);
 
   const timeline = useMemo(() => {
-    return detail?.recentActivity.slice(-12).reverse() ?? [];
-  }, [detail]);
+    return selectedDetail?.recentActivity.slice(-12).reverse() ?? [];
+  }, [selectedDetail]);
 
   const noProjectsDiscovered =
     !loading && Boolean(state) && state.settings.watchedRoots.length > 0 && state.projects.length === 0;
@@ -784,26 +871,17 @@ export default function App() {
 
   const selectProject = useCallback(async (project: ProjectSummary) => {
     setSelectedRoot(project.root);
-    setDetail(null);
     void setLastFocusedProject(project.root).catch((selectionError) => {
       setError(selectionError instanceof Error ? selectionError.message : String(selectionError));
     });
 
     if (!project.initialized) {
-      setDetailLoading(false);
       setInitName(project.name);
       return;
     }
 
-    setDetailLoading(true);
-    try {
-      setDetail(await getProject(project.root));
-    } catch (selectionError) {
-      setError(selectionError instanceof Error ? selectionError.message : String(selectionError));
-    } finally {
-      setDetailLoading(false);
-    }
-  }, []);
+    void reloadState(project.root);
+  }, [reloadState]);
 
   const handleAddWatchRoot = useCallback(async () => {
     const candidate = watchRootInput.trim();
@@ -817,7 +895,7 @@ export default function App() {
     try {
       const nextState = await addWatchRoot(candidate);
       setWatchRootInput('');
-      await applyLoadState(nextState, { preserveDetail: true });
+      await applyLoadState(nextState);
     } catch (mutationError) {
       const message = mutationError instanceof Error ? mutationError.message : String(mutationError);
       setError(message);
@@ -832,7 +910,7 @@ export default function App() {
       setError(null);
       try {
         const nextState = await removeWatchRoot(root);
-        await applyLoadState(nextState, { preserveDetail: true });
+        await applyLoadState(nextState);
       } catch (mutationError) {
         setError(mutationError instanceof Error ? mutationError.message : String(mutationError));
       }
@@ -845,7 +923,7 @@ export default function App() {
       setError(null);
       try {
         const nextState = await setBridgeEnabled(enabled);
-        await applyLoadState(nextState, { preserveDetail: true });
+        await applyLoadState(nextState);
       } catch (mutationError) {
         setError(mutationError instanceof Error ? mutationError.message : String(mutationError));
       }
@@ -857,7 +935,7 @@ export default function App() {
     setError(null);
     try {
       const nextState = await restartBridge();
-      await applyLoadState(nextState, { preserveDetail: true });
+      await applyLoadState(nextState);
     } catch (mutationError) {
       setError(mutationError instanceof Error ? mutationError.message : String(mutationError));
     }
@@ -867,7 +945,7 @@ export default function App() {
     setError(null);
     try {
       const nextState = await regenerateBridgeToken();
-      await applyLoadState(nextState, { preserveDetail: true });
+      await applyLoadState(nextState);
     } catch (mutationError) {
       setError(mutationError instanceof Error ? mutationError.message : String(mutationError));
     }
@@ -881,17 +959,15 @@ export default function App() {
     setError(null);
     setDetailLoading(true);
     try {
-      const nextDetail = await initProject(selectedSummary.root, initName || selectedSummary.name);
-      setDetail(nextDetail);
-      setSelectedRoot(nextDetail.manifest.root);
+      await initProject(selectedSummary.root, initName || selectedSummary.name);
       const nextState = await refreshProjects();
-      setState(nextState);
+      await applyLoadState(nextState, { selectRoot: selectedSummary.root });
     } catch (mutationError) {
       setError(mutationError instanceof Error ? mutationError.message : String(mutationError));
     } finally {
       setDetailLoading(false);
     }
-  }, [initName, selectedSummary]);
+  }, [applyLoadState, initName, selectedSummary]);
 
   const handleCopyBridgeSnippet = useCallback(async (kind: string) => {
     setError(null);
@@ -992,7 +1068,7 @@ export default function App() {
       <main className="content">
         {loading ? <div className="empty-state">Loading state…</div> : null}
         {error ? <div className="error-banner">{error}</div> : null}
-        {!loading && !selectedSummary ? (
+        {!loading && !selectedBoardRow && !selectedSummary ? (
           <div className="empty-state">
             {noProjectsDiscovered ? 'No repos in current roots.' : 'Add a root to start.'}
           </div>
@@ -1020,9 +1096,9 @@ export default function App() {
           </section>
         ) : null}
 
-        {!loading && detail ? (
+        {!loading && selectedBoardRow && selectedDetail ? (
           <WorkspaceView
-            detail={detail}
+            detail={selectedDetail}
             completedCount={completedCount}
             indexedPlan={indexedPlan}
             activeSessionCount={activeSessionCount}
@@ -1037,7 +1113,9 @@ export default function App() {
             onToggleStep={handleTogglePlanStep}
           />
         ) : null}
-        {!loading && !detail && detailLoading ? <div className="empty-state">Loading project…</div> : null}
+        {!loading && selectedBoardRow && !selectedDetail && detailLoading ? (
+          <div className="empty-state">Loading project…</div>
+        ) : null}
       </main>
 
       {settingsOpen ? (
