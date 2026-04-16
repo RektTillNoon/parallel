@@ -39,24 +39,14 @@ import {
   type SessionBoardRow,
 } from './lib/session-board';
 import CollapsibleSection from './components/CollapsibleSection';
+import ContextRail from './components/ContextRail';
+import SessionLedger from './components/SessionLedger';
 import type {
-  ActivityEvent,
   BridgeStateEvent,
   LoadStatePayload,
-  Phase,
   ProjectDetail,
   ProjectSummary,
-  Step,
-  WorkflowSession,
 } from './lib/types';
-
-type IndexedPlanStep = {
-  order: number;
-  phase: Phase;
-  step: Step;
-};
-
-type SessionGroups = Record<'active' | 'paused' | 'done', WorkflowSession[]>;
 
 const emptyLoadState: LoadStatePayload = {
   settings: {
@@ -109,6 +99,13 @@ export function resolveSelectedSessionId(selectedBoardRow: SessionBoardRow | nul
   return selectedBoardRow?.sessionId ?? null;
 }
 
+export function resolveBoardSelectionFromRow(selectedRow: SessionBoardRow | null) {
+  return {
+    selectedRoot: selectedRow?.repoRoot ?? null,
+    selectedSessionId: selectedRow?.sessionId ?? null,
+  };
+}
+
 function compactProjectStatus(status: ProjectSummary['status']) {
   switch (status) {
     case 'uninitialized':
@@ -148,24 +145,6 @@ function formatRelativeTime(value: string | null | undefined) {
 
   const absDays = Math.round(absHours / 24);
   return relativeTimeFormatter.format(Math.round(diffMs / 86400000), 'day');
-}
-
-function getIndexedPlan(phases: Phase[]): IndexedPlanStep[] {
-  let order = 1;
-  return phases.flatMap((phase) =>
-    phase.steps.map((step) => {
-      const indexed = { order, phase, step };
-      order += 1;
-      return indexed;
-    }),
-  );
-}
-
-function timelineLabel(event: ActivityEvent, sessionsById: Map<string, WorkflowSession>) {
-  if (event.session_id) {
-    return sessionsById.get(event.session_id)?.title ?? event.session_id;
-  }
-  return `${event.actor}/${event.source}`;
 }
 
 type SidebarProps = {
@@ -259,294 +238,6 @@ const Sidebar = memo(function Sidebar({
   );
 });
 
-type FocusPanelProps = {
-  detail: ProjectDetail;
-  currentOwner: WorkflowSession | null;
-  currentStepEntry: IndexedPlanStep | null;
-  nextStepEntry: IndexedPlanStep | undefined;
-};
-
-const FocusPanel = memo(function FocusPanel({
-  detail,
-  currentOwner,
-  currentStepEntry,
-  nextStepEntry,
-}: FocusPanelProps) {
-  return (
-    <section className="panel focus-panel">
-      <div className="focus-head">
-        <span className={`status status-${detail.runtime.status}`}>{detail.runtime.status}</span>
-        {detail.runtime.active_branch ? (
-          <span className="hero-branch">{detail.runtime.active_branch}</span>
-        ) : null}
-      </div>
-      <h3>{currentStepEntry ? `${currentStepEntry.order}. ${currentStepEntry.step.title}` : 'No current step'}</h3>
-      {currentStepEntry?.step.summary ? <p className="focus-summary">{currentStepEntry.step.summary}</p> : null}
-      <div className="focus-meta-grid">
-        <div>
-          <label>Owning session</label>
-          <strong>{currentOwner?.title ?? 'Unowned'}</strong>
-        </div>
-        <div>
-          <label>Next valid step</label>
-          <strong>{nextStepEntry ? `${nextStepEntry.order}. ${nextStepEntry.step.title}` : 'None'}</strong>
-        </div>
-      </div>
-      {detail.runtime.blockers.length > 0 ? (
-        <div className="blocker-strip">
-          {detail.runtime.blockers.map((blocker) => (
-            <span className="blocker-chip" key={blocker}>
-              {blocker}
-            </span>
-          ))}
-        </div>
-      ) : null}
-    </section>
-  );
-});
-
-type PlanPanelProps = {
-  indexedPlan: IndexedPlanStep[];
-  currentStepId: string | null | undefined;
-  expandedSteps: Record<string, boolean>;
-  sessionsById: Map<string, WorkflowSession>;
-  onToggleStep: (stepId: string) => void;
-};
-
-const PlanPanel = memo(function PlanPanel({
-  indexedPlan,
-  currentStepId,
-  expandedSteps,
-  sessionsById,
-  onToggleStep,
-}: PlanPanelProps) {
-  return (
-    <section className="panel plan-panel">
-      <div className="panel-header">
-        <h3>Plan</h3>
-        <span className="muted">{indexedPlan.length} steps</span>
-      </div>
-      <div className="plan-list">
-        {indexedPlan.map((entry) => {
-          const owner = entry.step.owner_session_id
-            ? sessionsById.get(entry.step.owner_session_id) ?? null
-            : null;
-          const isExpanded = expandedSteps[entry.step.id] ?? entry.step.id === currentStepId;
-          const hasDetails = entry.step.details.length > 0 || entry.step.subtasks.length > 0;
-
-          return (
-            <article
-              className={`plan-row ${entry.step.id === currentStepId ? 'current' : ''} status-${entry.step.status}`}
-              key={entry.step.id}
-            >
-              <button
-                type="button"
-                className="plan-row-main"
-                onClick={hasDetails ? () => onToggleStep(entry.step.id) : undefined}
-              >
-                <span className="plan-order">{entry.order}</span>
-                <div className="plan-copy">
-                  <div className="plan-row-head">
-                    <strong>{entry.step.title}</strong>
-                    <span className={`status status-${entry.step.status}`}>{entry.step.status}</span>
-                  </div>
-                  {entry.step.summary ? <p className="plan-summary">{entry.step.summary}</p> : null}
-                  <div className="plan-row-meta">
-                    <span>{entry.phase.title}</span>
-                    <span>{owner?.title ?? 'No owner'}</span>
-                  </div>
-                </div>
-                {hasDetails ? <span className="plan-row-toggle">{isExpanded ? '−' : '+'}</span> : null}
-              </button>
-              {hasDetails && isExpanded ? (
-                <div className="plan-row-details">
-                  {entry.step.details.length > 0 ? (
-                    <ul className="detail-list">
-                      {entry.step.details.map((detailLine) => (
-                        <li key={detailLine}>{detailLine}</li>
-                      ))}
-                    </ul>
-                  ) : null}
-                  {entry.step.subtasks.length > 0 ? (
-                    <div className="subtask-list">
-                      {entry.step.subtasks.map((subtask) => (
-                        <div className="subtask-row" key={subtask.id}>
-                          <span className={`subtask-state subtask-${subtask.status}`} />
-                          <span>{subtask.title}</span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-            </article>
-          );
-        })}
-      </div>
-    </section>
-  );
-});
-
-type SessionsPanelProps = {
-  groupedSessions: SessionGroups;
-  stepTitlesById: Map<string, string>;
-};
-
-const SessionsPanel = memo(function SessionsPanel({
-  groupedSessions,
-  stepTitlesById,
-}: SessionsPanelProps) {
-  const groups: Array<keyof SessionGroups> = ['active', 'paused', 'done'];
-
-  return (
-    <section className="panel session-panel">
-      <div className="panel-header">
-        <h3>Sessions</h3>
-      </div>
-      {groups.map((groupKey) =>
-        groupedSessions[groupKey].length > 0 ? (
-          <div className="session-group" key={groupKey}>
-            <label>{groupKey}</label>
-            <div className="session-list">
-              {groupedSessions[groupKey].map((session) => (
-                <div className="session-row" key={session.id}>
-                  <div>
-                    <strong>{session.title}</strong>
-                    <p className="muted">
-                      {session.actor}/{session.source}
-                    </p>
-                  </div>
-                  <div className="session-row-meta">
-                    <span>
-                      {session.owned_step_id
-                        ? stepTitlesById.get(session.owned_step_id) ?? session.owned_step_id
-                        : 'No owned step'}
-                    </span>
-                    <span>{formatRelativeTime(session.last_updated_at)}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : null,
-      )}
-    </section>
-  );
-});
-
-type TimelinePanelProps = {
-  timeline: ActivityEvent[];
-  sessionsById: Map<string, WorkflowSession>;
-  stepTitlesById: Map<string, string>;
-};
-
-const TimelinePanel = memo(function TimelinePanel({
-  timeline,
-  sessionsById,
-  stepTitlesById,
-}: TimelinePanelProps) {
-  return (
-    <section className="panel timeline-panel">
-      <div className="panel-header">
-        <h3>Timeline</h3>
-      </div>
-      <div className="timeline-list">
-        {timeline.map((event) => (
-          <div className="timeline-row" key={`${event.timestamp}-${event.summary}`}>
-            <div className="timeline-row-head">
-              <strong>{event.summary}</strong>
-              <span>{formatRelativeTime(event.timestamp)}</span>
-            </div>
-            <div className="timeline-row-meta">
-              <span>{timelineLabel(event, sessionsById)}</span>
-              {event.step_id ? <span>{stepTitlesById.get(event.step_id) ?? event.step_id}</span> : null}
-            </div>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-});
-
-type WorkspaceViewProps = {
-  detail: ProjectDetail;
-  completedCount: number;
-  indexedPlan: IndexedPlanStep[];
-  activeSessionCount: number;
-  currentOwner: WorkflowSession | null;
-  currentStepEntry: IndexedPlanStep | null;
-  nextStepEntry: IndexedPlanStep | undefined;
-  expandedSteps: Record<string, boolean>;
-  sessionsById: Map<string, WorkflowSession>;
-  groupedSessions: SessionGroups;
-  timeline: ActivityEvent[];
-  stepTitlesById: Map<string, string>;
-  onToggleStep: (stepId: string) => void;
-};
-
-const WorkspaceView = memo(function WorkspaceView({
-  detail,
-  completedCount,
-  indexedPlan,
-  activeSessionCount,
-  currentOwner,
-  currentStepEntry,
-  nextStepEntry,
-  expandedSteps,
-  sessionsById,
-  groupedSessions,
-  timeline,
-  stepTitlesById,
-  onToggleStep,
-}: WorkspaceViewProps) {
-  return (
-    <section className="workspace">
-      <section className="panel workspace-header">
-        <div>
-          <h2>{detail.manifest.name}</h2>
-          <p className="muted">{detail.manifest.root}</p>
-        </div>
-        <div className="workspace-header-meta">
-          <span>{completedCount}/{indexedPlan.length} complete</span>
-          <span>{activeSessionCount} active sessions</span>
-          <span>{formatRelativeTime(detail.runtime.last_updated_at)}</span>
-        </div>
-      </section>
-
-      <section className="workspace-grid">
-        <div className="workspace-main">
-          <FocusPanel
-            detail={detail}
-            currentOwner={currentOwner}
-            currentStepEntry={currentStepEntry}
-            nextStepEntry={nextStepEntry}
-          />
-          <PlanPanel
-            indexedPlan={indexedPlan}
-            currentStepId={currentStepEntry?.step.id}
-            expandedSteps={expandedSteps}
-            sessionsById={sessionsById}
-            onToggleStep={onToggleStep}
-          />
-        </div>
-
-        <aside className="workspace-side">
-          {detail.sessions.length > 0 ? (
-            <SessionsPanel groupedSessions={groupedSessions} stepTitlesById={stepTitlesById} />
-          ) : null}
-          {timeline.length > 0 ? (
-            <TimelinePanel
-              timeline={timeline}
-              sessionsById={sessionsById}
-              stepTitlesById={stepTitlesById}
-            />
-          ) : null}
-        </aside>
-      </section>
-    </section>
-  );
-});
-
 export default function App() {
   const [state, setState] = useState<LoadStatePayload | null>(null);
   const [selectedRoot, setSelectedRoot] = useState<string | null>(null);
@@ -563,7 +254,6 @@ export default function App() {
   const [rootsOpen, setRootsOpen] = useState(false);
   const [bridgeOpen, setBridgeOpen] = useState(true);
   const [reposOpen, setReposOpen] = useState(true);
-  const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
   const reloadInFlight = useRef(false);
   const reloadQueued = useRef<string | null | undefined>(undefined);
   const selectedRootRef = useRef<string | null>(null);
@@ -774,85 +464,8 @@ export default function App() {
     return selectedBoardRow ? detailMap.get(selectedBoardRow.repoRoot) ?? null : null;
   }, [detailMap, selectedBoardRow]);
 
-  const indexedPlan = useMemo(() => {
-    return selectedDetail ? getIndexedPlan(selectedDetail.plan.phases) : [];
-  }, [selectedDetail]);
-
-  const planEntriesById = useMemo(() => {
-    return new Map(indexedPlan.map((entry) => [entry.step.id, entry]));
-  }, [indexedPlan]);
-
-  const stepTitlesById = useMemo(() => {
-    return new Map(indexedPlan.map((entry) => [entry.step.id, entry.step.title]));
-  }, [indexedPlan]);
-
-  const stepStatusById = useMemo(() => {
-    return new Map(indexedPlan.map((entry) => [entry.step.id, entry.step.status]));
-  }, [indexedPlan]);
-
-  const currentStepEntry = useMemo(() => {
-    if (!selectedDetail) {
-      return null;
-    }
-    return planEntriesById.get(selectedDetail.runtime.current_step_id ?? '') ?? null;
-  }, [selectedDetail, planEntriesById]);
-
-  const nextStepEntry = useMemo(() => {
-    return indexedPlan.find(
-      (entry) =>
-        entry.step.id !== currentStepEntry?.step.id &&
-        entry.step.status !== 'done' &&
-        entry.step.depends_on.every((dependency) => stepStatusById.get(dependency) === 'done'),
-    );
-  }, [currentStepEntry?.step.id, indexedPlan, stepStatusById]);
-
-  const sessionsById = useMemo(() => {
-    return new Map((selectedDetail?.sessions ?? []).map((session) => [session.id, session]));
-  }, [selectedDetail]);
-
-  const currentOwner = useMemo(() => {
-    return currentStepEntry?.step.owner_session_id
-      ? sessionsById.get(currentStepEntry.step.owner_session_id) ?? null
-      : null;
-  }, [currentStepEntry, sessionsById]);
-
-  const groupedSessions = useMemo<SessionGroups>(() => {
-    const groups: SessionGroups = {
-      active: [],
-      paused: [],
-      done: [],
-    };
-
-    for (const session of selectedDetail?.sessions ?? []) {
-      groups[session.status].push(session);
-    }
-
-    return groups;
-  }, [selectedDetail]);
-
-  const activeSessionCount = groupedSessions.active.length;
-
-  const completedCount = useMemo(() => {
-    return indexedPlan.reduce((count, entry) => count + (entry.step.status === 'done' ? 1 : 0), 0);
-  }, [indexedPlan]);
-
-  const timeline = useMemo(() => {
-    return selectedDetail?.recentActivity.slice(-12).reverse() ?? [];
-  }, [selectedDetail]);
-
   const noProjectsDiscovered =
     !loading && Boolean(state) && state.settings.watchedRoots.length > 0 && state.projects.length === 0;
-
-  useEffect(() => {
-    if (!currentStepEntry) {
-      return;
-    }
-
-    setExpandedSteps((existing) => ({
-      ...existing,
-      [currentStepEntry.step.id]: true,
-    }));
-  }, [currentStepEntry?.step.id]);
 
   useEffect(() => {
     if (!settingsOpen) {
@@ -1000,16 +613,6 @@ export default function App() {
     }
   }, []);
 
-  const handleTogglePlanStep = useCallback(
-    (stepId: string) => {
-      setExpandedSteps((existing) => ({
-        ...existing,
-        [stepId]: !(existing[stepId] ?? stepId === currentStepEntry?.step.id),
-      }));
-    },
-    [currentStepEntry?.step.id],
-  );
-
   const handleSync = useCallback(() => {
     void reloadState(selectedRootRef.current);
   }, [reloadState]);
@@ -1026,6 +629,15 @@ export default function App() {
     },
     [selectProject],
   );
+
+  const handleBoardRowSelection = useCallback((row: SessionBoardRow) => {
+    const nextSelection = resolveBoardSelectionFromRow(row);
+    setSelectedRoot(nextSelection.selectedRoot);
+    setSelectedSessionId(nextSelection.selectedSessionId);
+    void setLastFocusedProject(row.repoRoot).catch((selectionError) => {
+      setError(selectionError instanceof Error ? selectionError.message : String(selectionError));
+    });
+  }, []);
 
   const bridgePort = state?.mcpRuntime.boundPort ?? state?.settings.mcp.port ?? null;
   const bridgeUrl = bridgePort ? `http://127.0.0.1:${bridgePort}/mcp` : 'Not configured';
@@ -1068,12 +680,6 @@ export default function App() {
       <main className="content">
         {loading ? <div className="empty-state">Loading state…</div> : null}
         {error ? <div className="error-banner">{error}</div> : null}
-        {!loading && !selectedBoardRow && !selectedSummary ? (
-          <div className="empty-state">
-            {noProjectsDiscovered ? 'No repos in current roots.' : 'Add a root to start.'}
-          </div>
-        ) : null}
-
         {!loading && selectedSummary && !selectedSummary.initialized ? (
           <section className="panel init-panel">
             <h2>{selectedSummary.name}</h2>
@@ -1096,26 +702,40 @@ export default function App() {
           </section>
         ) : null}
 
-        {!loading && selectedBoardRow && selectedDetail ? (
-          <WorkspaceView
-            detail={selectedDetail}
-            completedCount={completedCount}
-            indexedPlan={indexedPlan}
-            activeSessionCount={activeSessionCount}
-            currentOwner={currentOwner}
-            currentStepEntry={currentStepEntry}
-            nextStepEntry={nextStepEntry}
-            expandedSteps={expandedSteps}
-            sessionsById={sessionsById}
-            groupedSessions={groupedSessions}
-            timeline={timeline}
-            stepTitlesById={stepTitlesById}
-            onToggleStep={handleTogglePlanStep}
-          />
+        {!loading && board.rows.length > 0 ? (
+          <>
+            <section className="board-topline">
+              <div>
+                <h2>Active sessions</h2>
+                <p className="muted">Cross-repo board. Selected repo detail is secondary.</p>
+              </div>
+              <div className="board-stats">
+                <span>{board.rows.length} active</span>
+                <span>{state?.projects.filter((project) => project.blockerCount > 0).length ?? 0} blocked</span>
+                <span>{state?.projects.filter((project) => project.activeSessionCount > 0).length ?? 0} repos live</span>
+              </div>
+            </section>
+
+            <section className="session-board-layout">
+              <SessionLedger
+                rows={board.rows}
+                selectedSessionId={selectedBoardRow?.sessionId ?? null}
+                onSelectSession={handleBoardRowSelection}
+                formatRelativeTime={formatRelativeTime}
+              />
+              <ContextRail
+                detail={selectedDetail}
+                currentStepTitle={selectedBoardRow?.stepTitle ?? 'No current step'}
+              />
+            </section>
+          </>
         ) : null}
-        {!loading && selectedBoardRow && !selectedDetail && detailLoading ? (
-          <div className="empty-state">Loading project…</div>
+        {!loading && !board.rows.length && !selectedSummary ? (
+          <div className="empty-state">
+            {noProjectsDiscovered ? 'No repos in current roots.' : 'Add a root to start.'}
+          </div>
         ) : null}
+        {!loading && !board.rows.length && detailLoading ? <div className="empty-state">Loading project…</div> : null}
       </main>
 
       {settingsOpen ? (
