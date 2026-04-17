@@ -1,0 +1,37 @@
+{
+  "name": "parallel",
+  "version": "0.1.0",
+  "description": "Product guidance for using parallel through its MCP bridge and projectctl CLI during implementation, resumption, and handoff workflows.",
+  "author": {
+    "name": "parallel",
+    "url": "https://github.com/RektTillNoon/parallel"
+  },
+  "homepage": "https://github.com/RektTillNoon/parallel",
+  "repository": "https://github.com/RektTillNoon/parallel",
+  "keywords": [
+    "parallel",
+    "workflow",
+    "tauri",
+    "mcp",
+    "projectctl"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Parallel",
+    "shortDescription": "Guidance for using parallel during execution through MCP or projectctl.",
+    "longDescription": "Teaches agents to use parallel as the execution-time workflow system once planning turns into implementation: inspect state, ensure or resume sessions, claim steps, log progress, manage blockers, propose decisions, and refresh handoff through the desktop app's local MCP bridge or the projectctl CLI.",
+    "developerName": "parallel",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/RektTillNoon/parallel",
+    "defaultPrompt": [
+      "Use Parallel to find active work across my watched repos and tell me what matters next.",
+      "Start implementing this approved plan in Parallel by checking state and claiming the right step.",
+      "Resume work in Parallel by claiming the right step, logging progress, and updating handoff."
+    ],
+    "brandColor": "#A44F37"
+  }
+}
