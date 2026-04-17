@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -239,6 +241,24 @@ pub struct ProjectIndexRecord {
     #[serde(flatten)]
     pub summary: ProjectSummary,
     pub watched_root: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardStepDetail {
+    pub title: String,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardProjectDetail {
+    pub root: String,
+    pub sessions: Vec<WorkflowSession>,
+    pub runtime_next_action: String,
+    pub blockers: Vec<String>,
+    pub recent_activity: Vec<ActivityEvent>,
+    pub active_step_lookup: BTreeMap<String, BoardStepDetail>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

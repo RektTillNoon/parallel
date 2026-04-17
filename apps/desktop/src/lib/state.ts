@@ -3,7 +3,6 @@ import type { BridgeRuntime, LoadStatePayload, ProjectSummary } from './types';
 export interface SelectionResolution {
   selectedRoot: string | null;
   selectedProject: ProjectSummary | null;
-  shouldLoadDetail: boolean;
 }
 
 export interface BridgeStatusPresentation {
@@ -28,7 +27,6 @@ export function resolveSelectionState(
   return {
     selectedRoot,
     selectedProject,
-    shouldLoadDetail: Boolean(selectedRoot && selectedProject?.initialized),
   };
 }
 

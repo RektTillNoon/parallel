@@ -45,12 +45,8 @@ export async function setLastFocusedProject(root: string | null) {
   await invoke('set_last_focused_project', { root });
 }
 
-export async function getProject(root: string) {
-  return invokeJson<ProjectDetail>('get_project', { root });
-}
-
 export async function initProject(root: string, name: string) {
-  return invokeJson<ProjectDetail>('init_project', { root, name });
+  return invokeJson<LoadStatePayload>('init_project', { root, name });
 }
 
 export async function startStep(root: string, stepId: string) {

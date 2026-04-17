@@ -15,7 +15,6 @@ import {
   addWatchRoot,
   getBridgeClientSnippets,
   getBridgeStatus,
-  getProject,
   initProject,
   loadState,
   refreshProjects,
@@ -34,7 +33,6 @@ import {
 import {
   buildSessionBoard,
   chooseBoardSelection,
-  type BoardProjectDetailMap,
   type SessionBoardData,
   type SessionBoardRow,
 } from './lib/session-board';
@@ -42,9 +40,9 @@ import CollapsibleSection from './components/CollapsibleSection';
 import ContextRail from './components/ContextRail';
 import SessionLedger from './components/SessionLedger';
 import type {
+  BoardProjectDetail,
   BridgeStateEvent,
   LoadStatePayload,
-  ProjectDetail,
   ProjectSummary,
 } from './lib/types';
 
@@ -59,6 +57,7 @@ const emptyLoadState: LoadStatePayload = {
     },
   },
   projects: [],
+  boardProjects: [],
   mcpRuntime: {
     status: 'stopped',
     boundPort: null,
@@ -263,10 +262,9 @@ const Sidebar = memo(function Sidebar({
 export default function App() {
   const [state, setState] = useState<LoadStatePayload | null>(null);
   const [selectedRoot, setSelectedRoot] = useState<string | null>(null);
-  const [detailMap, setDetailMap] = useState<BoardProjectDetailMap>(new Map());
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [detailLoading, setDetailLoading] = useState(false);
+  const [initPending, setInitPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [watchRootInput, setWatchRootInput] = useState('');
   const [watchRootError, setWatchRootError] = useState<string | null>(null);
@@ -284,58 +282,13 @@ export default function App() {
     selectedRootRef.current = selectedRoot;
   }, [selectedRoot]);
 
-  const loadBoardDetails = useCallback(async (nextState: LoadStatePayload, selectedRootCandidate: string | null) => {
-    const rootsToLoad = new Set<string>();
-
-    for (const project of nextState.projects) {
-      if (project.initialized && project.activeSessionCount > 0) {
-        rootsToLoad.add(project.root);
-      }
-    }
-
-    if (selectedRootCandidate) {
-      const selectedProject =
-        nextState.projects.find((project) => project.root === selectedRootCandidate) ?? null;
-      if (selectedProject?.initialized) {
-        rootsToLoad.add(selectedRootCandidate);
-      }
-    }
-
-    if (rootsToLoad.size === 0) {
-      setDetailMap(new Map());
-      setDetailLoading(false);
-      return;
-    }
-
-    setDetailLoading(true);
-    try {
-      const settledEntries = await Promise.allSettled(
-        [...rootsToLoad].map(async (root) => [root, await getProject(root)] as const),
-      );
-      const entries: Array<readonly [string, ProjectDetail]> = [];
-
-      for (const result of settledEntries) {
-        if (result.status === 'fulfilled') {
-          entries.push(result.value);
-        } else {
-          setError(result.reason instanceof Error ? result.reason.message : String(result.reason));
-        }
-      }
-
-      setDetailMap(new Map(entries));
-    } finally {
-      setDetailLoading(false);
-    }
-  }, []);
-
   const applyLoadState = useCallback(
-    async (nextState: LoadStatePayload, options?: { selectRoot?: string | null }) => {
+    (nextState: LoadStatePayload, options?: { selectRoot?: string | null }) => {
       setState(nextState);
       const selection = resolveSelectionState(nextState, options?.selectRoot ?? selectedRootRef.current);
       setSelectedRoot(selection.selectedRoot);
-      await loadBoardDetails(nextState, selection.selectedRoot);
     },
-    [loadBoardDetails],
+    [],
   );
 
   const reloadState = useCallback(
@@ -471,8 +424,8 @@ export default function App() {
   }, [selectedRoot, state?.projects]);
 
   const board = useMemo(() => {
-    return buildSessionBoard(state ?? emptyLoadState, detailMap);
-  }, [detailMap, state]);
+    return buildSessionBoard(state ?? emptyLoadState);
+  }, [state]);
 
   const selectedBoardRow = useMemo(() => {
     return choosePrimaryBoardRow(board, selectedRoot, selectedSessionId);
@@ -482,9 +435,22 @@ export default function App() {
     setSelectedSessionId(resolveSelectedSessionId(selectedBoardRow));
   }, [selectedBoardRow]);
 
-  const selectedDetail = useMemo(() => {
-    return selectedBoardRow ? detailMap.get(selectedBoardRow.repoRoot) ?? null : null;
-  }, [detailMap, selectedBoardRow]);
+  const selectedBoardProject = useMemo<BoardProjectDetail | null>(() => {
+    return state?.boardProjects.find((project) => project.root === selectedRoot) ?? null;
+  }, [selectedRoot, state?.boardProjects]);
+
+  const currentStepSummary = useMemo(() => {
+    if (selectedBoardRow?.summary) {
+      return selectedBoardRow.summary;
+    }
+    if (selectedSummary?.currentStepId) {
+      const activeStep = selectedBoardProject?.activeStepLookup[selectedSummary.currentStepId];
+      if (activeStep?.summary) {
+        return activeStep.summary;
+      }
+    }
+    return selectedBoardProject?.runtimeNextAction ?? 'No step summary';
+  }, [selectedBoardProject, selectedBoardRow?.summary, selectedSummary?.currentStepId]);
 
   const noProjectsDiscovered =
     !loading && Boolean(state) && state.settings.watchedRoots.length > 0 && state.projects.length === 0;
@@ -514,9 +480,7 @@ export default function App() {
       setInitName(project.name);
       return;
     }
-
-    void reloadState(project.root);
-  }, [reloadState]);
+  }, []);
 
   const handleAddWatchRoot = useCallback(async () => {
     const candidate = watchRootInput.trim();
@@ -592,15 +556,14 @@ export default function App() {
     }
 
     setError(null);
-    setDetailLoading(true);
+    setInitPending(true);
     try {
-      await initProject(selectedSummary.root, initName || selectedSummary.name);
-      const nextState = await refreshProjects();
+      const nextState = await initProject(selectedSummary.root, initName || selectedSummary.name);
       await applyLoadState(nextState, { selectRoot: selectedSummary.root });
     } catch (mutationError) {
       setError(mutationError instanceof Error ? mutationError.message : String(mutationError));
     } finally {
-      setDetailLoading(false);
+      setInitPending(false);
     }
   }, [applyLoadState, initName, selectedSummary]);
 
@@ -636,8 +599,16 @@ export default function App() {
   }, []);
 
   const handleSync = useCallback(() => {
-    void reloadState(selectedRootRef.current);
-  }, [reloadState]);
+    void (async () => {
+      setError(null);
+      try {
+        const nextState = await refreshProjects();
+        await applyLoadState(nextState, { selectRoot: selectedRootRef.current });
+      } catch (mutationError) {
+        setError(mutationError instanceof Error ? mutationError.message : String(mutationError));
+      }
+    })();
+  }, [applyLoadState]);
 
   const handleToggleRepos = useCallback(() => setReposOpen((open) => !open), []);
   const handleToggleSettings = useCallback(() => setSettingsOpen((open) => !open), []);
@@ -719,12 +690,12 @@ export default function App() {
                 onChange={(event) => setInitName(event.target.value)}
                 placeholder="Project name"
               />
-              <button type="submit">Initialize workflow</button>
+              <button type="submit">{initPending ? 'Initializing…' : 'Initialize workflow'}</button>
             </form>
           </section>
         ) : null}
 
-        {!loading && board.rows.length > 0 ? (
+        {!loading && (board.rows.length > 0 || Boolean(selectedBoardProject)) ? (
           <>
             <section className="board-topline">
               <div>
@@ -759,11 +730,10 @@ export default function App() {
                 formatRelativeTime={formatRelativeTime}
               />
               <ContextRail
-                detail={selectedDetail}
-                currentStepTitle={selectedBoardRow?.stepTitle ?? 'No current step'}
-                currentStepSummary={
-                  selectedBoardRow?.summary ?? selectedDetail?.runtime.next_action ?? 'No step summary'
-                }
+                project={selectedSummary}
+                detail={selectedBoardProject}
+                currentStepTitle={selectedBoardRow?.stepTitle ?? selectedSummary?.currentStepTitle ?? 'No current step'}
+                currentStepSummary={currentStepSummary}
               />
             </section>
           </>
@@ -773,7 +743,6 @@ export default function App() {
             {noProjectsDiscovered ? 'No repos in current roots.' : 'Add a root to start.'}
           </div>
         ) : null}
-        {!loading && !board.rows.length && detailLoading ? <div className="empty-state">Loading project…</div> : null}
       </main>
 
       {settingsOpen ? (

@@ -1,20 +1,7 @@
 import { memo } from 'react';
 
 import type { ActivityEvent } from '../lib/types';
-import type { ProjectDetail } from '../lib/types';
-
-const RECENT_ACTIVITY_LIMIT = 5;
-
-function toSortTimestamp(value: string) {
-  const timestamp = Date.parse(value);
-  return Number.isNaN(timestamp) ? Number.NEGATIVE_INFINITY : timestamp;
-}
-
-export function getRecentActivityEntries(recentActivity: ActivityEvent[]) {
-  return [...recentActivity]
-    .sort((left, right) => toSortTimestamp(right.timestamp) - toSortTimestamp(left.timestamp))
-    .slice(0, RECENT_ACTIVITY_LIMIT);
-}
+import type { BoardProjectDetail, ProjectSummary } from '../lib/types';
 
 export function formatActivityTime(value: string) {
   const timestamp = Date.parse(value);
@@ -55,28 +42,30 @@ export function groupActivityEntries(entries: ActivityEvent[]): ActivityGroup[] 
 }
 
 type ContextRailProps = {
-  detail: ProjectDetail | null;
+  project: ProjectSummary | null;
+  detail: BoardProjectDetail | null;
   currentStepTitle: string;
   currentStepSummary: string;
 };
 
 export default memo(function ContextRail({
+  project,
   detail,
   currentStepTitle,
   currentStepSummary,
 }: ContextRailProps) {
-  if (!detail) {
+  if (!project || !detail) {
     return null;
   }
 
-  const groups = groupActivityEntries(getRecentActivityEntries(detail.recentActivity));
+  const groups = groupActivityEntries(detail.recentActivity);
 
   return (
     <aside className="context-rail">
       <section>
         <p className="context-rail-label">Selected repo</p>
-        <h2>{detail.manifest.name}</h2>
-        <p>{detail.manifest.root}</p>
+        <h2>{project.name}</h2>
+        <p>{project.root}</p>
       </section>
       <section>
         <p className="context-rail-label">Current step</p>

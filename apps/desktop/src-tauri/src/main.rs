@@ -18,10 +18,11 @@ use bridge::{
 };
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use parallel_workflow_core::{
-    add_blocker, add_note, clear_blocker, complete_step, get_project as get_project_service,
-    init_project as init_project_service, list_projects, propose_decision, start_step,
-    ActivitySource, DecisionProposalInput, InitProjectInput, MutationActor, ProjectSummary,
-    SessionContextInput,
+    add_blocker, add_note, clear_blocker, complete_step, get_board_project_detail,
+    get_project as get_project_service, init_project as init_project_service, list_indexed_projects,
+    list_projects, missing_watched_root_coverage, propose_decision,
+    remove_watched_root_index_state, start_step, ActivitySource, BoardProjectDetail,
+    DecisionProposalInput, InitProjectInput, MutationActor, ProjectSummary, SessionContextInput,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{
@@ -48,6 +49,7 @@ struct Settings {
 struct LoadStatePayload {
     settings: Settings,
     projects: Vec<ProjectSummary>,
+    board_projects: Vec<BoardProjectDetail>,
     mcp_runtime: BridgeRuntimeSnapshot,
 }
 
@@ -661,28 +663,93 @@ fn reload_watcher(app: &AppHandle, state: &AppState, settings: &Settings) -> Res
 fn load_state_payload(app: &AppHandle, state: &AppState) -> Result<LoadStatePayload, String> {
     let _ = reconcile_bridge_runtime_if_healthy(state);
     let settings = ensure_settings(state)?;
-    let projects = if settings.watched_roots.is_empty() {
-        Vec::new()
+    let payload = build_snapshot_payload(state, &settings)?;
+    if let Err(error) = sync_tray(app, state, &payload) {
+        eprintln!("workflow desktop: tray sync failed during load_state_payload: {error}");
+    }
+    Ok(payload)
+}
+
+fn refresh_projects_payload(app: &AppHandle, state: &AppState) -> Result<LoadStatePayload, String> {
+    let _ = reconcile_bridge_runtime_if_healthy(state);
+    let settings = ensure_settings(state)?;
+    let payload = build_refreshed_payload(state, &settings)?;
+    if let Err(error) = sync_tray(app, state, &payload) {
+        eprintln!("workflow desktop: tray sync failed during refresh_projects_payload: {error}");
+    }
+    Ok(payload)
+}
+
+fn build_board_projects(projects: &[ProjectSummary]) -> Result<Vec<BoardProjectDetail>, String> {
+    projects
+        .iter()
+        .filter(|project| project.initialized && !project.missing)
+        .map(|project| get_board_project_detail(&project.root).map_err(|error| error.to_string()))
+        .collect()
+}
+
+fn snapshot_projects(state: &AppState, settings: &Settings) -> Result<Vec<ProjectSummary>, String> {
+    if settings.watched_roots.is_empty() {
+        Ok(Vec::new())
     } else {
         let index_db_path = state.index_db_path.to_string_lossy().into_owned();
-        list_projects(&settings.watched_roots, Some(index_db_path.as_str())).map_err(|error| error.to_string())?
-    };
+        list_indexed_projects(&settings.watched_roots, index_db_path.as_str())
+            .map_err(|error| error.to_string())
+    }
+}
 
+fn refreshed_projects(state: &AppState, settings: &Settings) -> Result<Vec<ProjectSummary>, String> {
+    if settings.watched_roots.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let index_db_path = state.index_db_path.to_string_lossy().into_owned();
+    list_projects(&settings.watched_roots, Some(index_db_path.as_str())).map_err(|error| error.to_string())
+}
+
+fn build_snapshot_payload(state: &AppState, settings: &Settings) -> Result<LoadStatePayload, String> {
+    let projects = snapshot_projects(state, settings)?;
+    let board_projects = build_board_projects(&projects)?;
     let mcp_runtime = state
         .bridge
         .lock()
         .map_err(|_| "bridge mutex poisoned".to_string())?
         .runtime
         .clone();
-    let payload = LoadStatePayload {
-        settings,
+    Ok(LoadStatePayload {
+        settings: settings.clone(),
         projects,
+        board_projects,
         mcp_runtime,
-    };
-    if let Err(error) = sync_tray(app, state, &payload) {
-        eprintln!("workflow desktop: tray sync failed during load_state_payload: {error}");
+    })
+}
+
+fn build_refreshed_payload(state: &AppState, settings: &Settings) -> Result<LoadStatePayload, String> {
+    let projects = refreshed_projects(state, settings)?;
+    let board_projects = build_board_projects(&projects)?;
+    let mcp_runtime = state
+        .bridge
+        .lock()
+        .map_err(|_| "bridge mutex poisoned".to_string())?
+        .runtime
+        .clone();
+    Ok(LoadStatePayload {
+        settings: settings.clone(),
+        projects,
+        board_projects,
+        mcp_runtime,
+    })
+}
+
+fn watched_roots_need_startup_refresh(state: &AppState, settings: &Settings) -> Result<bool, String> {
+    if settings.watched_roots.is_empty() {
+        return Ok(false);
     }
-    Ok(payload)
+
+    let index_db_path = state.index_db_path.to_string_lossy().into_owned();
+    Ok(!missing_watched_root_coverage(&settings.watched_roots, index_db_path.as_str())
+        .map_err(|error| error.to_string())?
+        .is_empty())
 }
 
 #[tauri::command]
@@ -692,7 +759,7 @@ fn load_state(app: AppHandle, state: State<AppState>) -> Result<String, String> 
 
 #[tauri::command]
 fn refresh_projects(app: AppHandle, state: State<AppState>) -> Result<String, String> {
-    to_json_string(&load_state_payload(&app, &state)?)
+    to_json_string(&refresh_projects_payload(&app, &state)?)
 }
 
 #[tauri::command]
@@ -708,7 +775,7 @@ fn add_watch_root(app: AppHandle, state: State<AppState>, root: String) -> Resul
     if settings.mcp.enabled {
         restart_bridge(&app, &state, "startRequested")?;
     }
-    to_json_string(&load_state_payload(&app, &state)?)
+    to_json_string(&refresh_projects_payload(&app, &state)?)
 }
 
 #[tauri::command]
@@ -719,11 +786,13 @@ fn remove_watch_root(app: AppHandle, state: State<AppState>, root: String) -> Re
         settings.last_focused_project = None;
     }
     save_settings(&state, &settings)?;
+    let index_db_path = state.index_db_path.to_string_lossy().into_owned();
+    remove_watched_root_index_state(&root, index_db_path.as_str()).map_err(|error| error.to_string())?;
     reload_watcher(&app, &state, &settings)?;
     if settings.mcp.enabled {
         restart_bridge(&app, &state, "startRequested")?;
     }
-    to_json_string(&load_state_payload(&app, &state)?)
+    to_json_string(&refresh_projects_payload(&app, &state)?)
 }
 
 #[tauri::command]
@@ -746,7 +815,7 @@ fn get_project(root: String) -> Result<String, String> {
 #[tauri::command]
 fn init_project(app: AppHandle, state: State<AppState>, root: String, name: String) -> Result<String, String> {
     let index_db_path = state.index_db_path.to_string_lossy().into_owned();
-    let result = init_project_service(InitProjectInput {
+    init_project_service(InitProjectInput {
         root: root.clone(),
         actor: DESKTOP_ACTOR_ID.to_string(),
         source: ActivitySource::Desktop,
@@ -761,9 +830,7 @@ fn init_project(app: AppHandle, state: State<AppState>, root: String, name: Stri
     let mut settings = ensure_settings(&state)?;
     settings.last_focused_project = Some(root);
     save_settings(&state, &settings)?;
-    let payload = load_state_payload(&app, &state)?;
-    let _ = sync_tray(&app, &state, &payload);
-    to_json_string(&result)
+    to_json_string(&refresh_projects_payload(&app, &state)?)
 }
 
 #[tauri::command]
@@ -1066,7 +1133,11 @@ fn main() {
             build_tray(app.handle(), &state_ref)?;
             let settings = ensure_settings(&state_ref)?;
             reload_watcher(app.handle(), &state_ref, &settings)?;
-            let _ = load_state_payload(app.handle(), &state_ref);
+            if watched_roots_need_startup_refresh(&state_ref, &settings)? {
+                let _ = refresh_projects_payload(app.handle(), &state_ref);
+            } else {
+                let _ = load_state_payload(app.handle(), &state_ref);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1107,6 +1178,41 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::{distributions::Alphanumeric, Rng};
+
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        let suffix = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(8)
+            .map(char::from)
+            .collect::<String>();
+        let path = env::temp_dir().join(format!("parallel-desktop-{label}-{suffix}"));
+        fs::create_dir_all(&path).expect("temporary test directory should create");
+        path
+    }
+
+    fn create_repo(root: &Path) {
+        fs::create_dir_all(root.join(".git")).expect("repo should create");
+        fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n").expect("git head should write");
+    }
+
+    fn test_state(base: &Path) -> AppState {
+        AppState {
+            settings_path: base.join("settings.json"),
+            index_db_path: base.join("workflow-index.sqlite"),
+            watcher: Mutex::new(None),
+            tray_handles: Mutex::new(None),
+            bridge: Mutex::new(BridgeSupervisor {
+                child: None,
+                child_pid: None,
+                stopping_pid: None,
+                runtime: BridgeRuntimeSnapshot {
+                    status: "stopped".to_string(),
+                    ..BridgeRuntimeSnapshot::default()
+                },
+            }),
+        }
+    }
 
     #[test]
     fn old_bridge_termination_does_not_clear_new_child() {
@@ -1168,5 +1274,77 @@ mod tests {
             .expect("bridge worker thread should report its id");
 
         assert_ne!(worker_thread, current_thread);
+    }
+
+    #[test]
+    fn startup_refresh_runs_once_for_uncovered_watched_roots() {
+        let base = unique_temp_dir("startup-coverage");
+        let state = test_state(&base);
+        let watched_root = base.join("watched-root");
+        fs::create_dir_all(&watched_root).expect("watched root should create");
+        let settings = Settings {
+            watched_roots: vec![watched_root.display().to_string()],
+            last_focused_project: None,
+            mcp: BridgeSettings {
+                enabled: false,
+                port: DEFAULT_BRIDGE_PORT,
+                token: String::new(),
+            },
+        };
+
+        assert!(watched_roots_need_startup_refresh(&state, &settings).expect("coverage check should work"));
+        build_refreshed_payload(&state, &settings).expect("refresh payload should build");
+        assert!(!watched_roots_need_startup_refresh(&state, &settings).expect("coverage should now exist"));
+    }
+
+    #[test]
+    fn snapshot_payload_keeps_new_repo_hidden_until_refresh() {
+        let base = unique_temp_dir("snapshot-refresh");
+        let state = test_state(&base);
+        let watched_root = base.join("watched-root");
+        fs::create_dir_all(&watched_root).expect("watched root should create");
+
+        let repo_one = watched_root.join("repo-one");
+        create_repo(&repo_one);
+        init_project_service(InitProjectInput {
+            root: repo_one.display().to_string(),
+            actor: DESKTOP_ACTOR_ID.to_string(),
+            source: ActivitySource::Desktop,
+            name: Some("Repo One".to_string()),
+            kind: Some(DEFAULT_PROJECT_KIND.to_string()),
+            owner: Some(DESKTOP_ACTOR_ID.to_string()),
+            tags: Some(Vec::new()),
+            index_db_path: Some(state.index_db_path.to_string_lossy().into_owned()),
+        })
+        .expect("initial repo should initialize");
+
+        let settings = Settings {
+            watched_roots: vec![watched_root.display().to_string()],
+            last_focused_project: Some(repo_one.display().to_string()),
+            mcp: BridgeSettings {
+                enabled: false,
+                port: DEFAULT_BRIDGE_PORT,
+                token: String::new(),
+            },
+        };
+
+        let refreshed = build_refreshed_payload(&state, &settings).expect("refresh should discover indexed repo");
+        assert_eq!(refreshed.projects.len(), 1);
+        assert_eq!(refreshed.board_projects.len(), 1);
+
+        let repo_two = watched_root.join("repo-two");
+        create_repo(&repo_two);
+
+        let snapshot = build_snapshot_payload(&state, &settings).expect("snapshot should use index only");
+        assert_eq!(snapshot.projects.len(), 1);
+        assert!(snapshot.projects[0].root.ends_with("/watched-root/repo-one"));
+
+        let refreshed_again = build_refreshed_payload(&state, &settings).expect("refresh should discover repo two");
+        assert_eq!(refreshed_again.projects.len(), 2);
+        assert!(refreshed_again
+            .projects
+            .iter()
+            .any(|project| project.root.ends_with("/watched-root/repo-two")));
+        assert_eq!(refreshed_again.board_projects.len(), 1);
     }
 }

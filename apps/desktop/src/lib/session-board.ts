@@ -1,6 +1,4 @@
-import type { LoadStatePayload, Phase, ProjectDetail, Step, WorkflowSession } from './types';
-
-export type BoardProjectDetailMap = Map<string, ProjectDetail>;
+import type { BoardProjectDetail, LoadStatePayload, WorkflowSession } from './types';
 
 export type SessionBoardRow = {
   sessionId: string;
@@ -18,39 +16,29 @@ export type SessionBoardData = {
   rows: SessionBoardRow[];
 };
 
-function buildStepLookup(phases: Phase[]) {
-  const lookup = new Map<string, Step>();
-
-  for (const phase of phases) {
-    for (const step of phase.steps) {
-      lookup.set(step.id, step);
-    }
-  }
-
-  return lookup;
-}
-
 function toSortTimestamp(value: string) {
   const timestamp = Date.parse(value);
   return Number.isNaN(timestamp) ? Number.NEGATIVE_INFINITY : timestamp;
 }
 
+function buildBoardProjectLookup(boardProjects: BoardProjectDetail[]) {
+  return new Map(boardProjects.map((project) => [project.root, project] as const));
+}
+
 export function buildSessionBoard(
   state: LoadStatePayload,
-  detailMap: BoardProjectDetailMap,
 ): SessionBoardData {
   const rows: SessionBoardRow[] = [];
+  const boardProjectLookup = buildBoardProjectLookup(state.boardProjects);
 
   for (const project of state.projects) {
-    const detail = detailMap.get(project.root);
+    const detail = boardProjectLookup.get(project.root);
     if (!detail) continue;
-
-    const stepLookup = buildStepLookup(detail.plan.phases);
 
     for (const session of detail.sessions) {
       if (session.status !== 'active') continue;
 
-      const step = session.owned_step_id ? stepLookup.get(session.owned_step_id) ?? null : null;
+      const step = session.owned_step_id ? detail.activeStepLookup[session.owned_step_id] ?? null : null;
 
       rows.push({
         sessionId: session.id,
@@ -59,8 +47,8 @@ export function buildSessionBoard(
         repoName: project.name,
         stepId: session.owned_step_id,
         stepTitle: step?.title ?? 'No owned step',
-        summary: step?.summary ?? detail.runtime.next_action,
-        status: detail.runtime.blockers.length > 0 ? 'blocked' : session.status,
+        summary: step?.summary ?? detail.runtimeNextAction,
+        status: detail.blockers.length > 0 ? 'blocked' : session.status,
         lastUpdatedAt: session.last_updated_at,
       });
     }

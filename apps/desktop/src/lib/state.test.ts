@@ -43,6 +43,7 @@ const baseState: LoadStatePayload = {
       pendingProposalCount: 0,
     },
   ],
+  boardProjects: [],
   mcpRuntime: {
     status: 'stopped',
     boundPort: null,
@@ -56,15 +57,14 @@ const baseState: LoadStatePayload = {
 };
 
 describe('resolveSelectionState', () => {
-  it('does not request detail for an auto-selected uninitialized repo', () => {
+  it('auto-selects the first repo when nothing is focused', () => {
     const result = resolveSelectionState(baseState);
 
     expect(result.selectedRoot).toBe('/Users/light/Projects/baryon');
     expect(result.selectedProject?.initialized).toBe(false);
-    expect(result.shouldLoadDetail).toBe(false);
   });
 
-  it('requests detail for an initialized selected repo', () => {
+  it('returns the initialized repo when the selected project is active', () => {
     const initializedState: LoadStatePayload = {
       ...baseState,
       projects: [
@@ -77,10 +77,11 @@ describe('resolveSelectionState', () => {
     };
 
     const result = resolveSelectionState(initializedState);
-    expect(result.shouldLoadDetail).toBe(true);
+    expect(result.selectedRoot).toBe('/Users/light/Projects/baryon');
+    expect(result.selectedProject?.initialized).toBe(true);
   });
 
-  it('keeps the last focused initialized repo selected for contextual detail', () => {
+  it('keeps the last focused initialized repo selected', () => {
     const state = {
       settings: {
         watchedRoots: ['/Users/light/Projects'],
@@ -135,6 +136,7 @@ describe('resolveSelectionState', () => {
           pendingProposalCount: 0,
         },
       ],
+      boardProjects: [],
       mcpRuntime: {
         status: 'stopped',
         boundPort: null,
@@ -151,7 +153,6 @@ describe('resolveSelectionState', () => {
 
     expect(result.selectedRoot).toBe('/Users/light/Projects/parallel');
     expect(result.selectedProject?.root).toBe('/Users/light/Projects/parallel');
-    expect(result.shouldLoadDetail).toBe(true);
   });
 });
 

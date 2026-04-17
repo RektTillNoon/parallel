@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -13,12 +13,12 @@ use crate::discovery::discover_git_repos;
 use crate::handoff::{generate_handoff, HandoffInput};
 use crate::index_store::IndexStore;
 use crate::models::{
-    AcceptedDecision, ActivityEvent, ActivitySource, AppendActivityInput, DecisionProposal,
-    DecisionProposalInput, DecisionProposalStatus, DecisionProposalsFile, EnsureSessionInput,
-    InitProjectInput, Manifest, MutationActor, Phase, Plan, PlanSyncPhaseInput, ProjectDetail,
-    ProjectIndexRecord, ProjectSummary, RuntimePatchInput, RuntimeState, SessionContextInput,
-    SessionStatus, SessionsFile, Step, StepStatus, Subtask, SubtaskStatus, SyncPlanInput,
-    WorkflowSession,
+    AcceptedDecision, ActivityEvent, ActivitySource, AppendActivityInput, BoardProjectDetail,
+    BoardStepDetail, DecisionProposal, DecisionProposalInput, DecisionProposalStatus,
+    DecisionProposalsFile, EnsureSessionInput, InitProjectInput, Manifest, MutationActor, Phase,
+    Plan, PlanSyncPhaseInput, ProjectDetail, ProjectIndexRecord, ProjectSummary,
+    RuntimePatchInput, RuntimeState, SessionContextInput, SessionStatus, SessionsFile, Step,
+    StepStatus, Subtask, SubtaskStatus, SyncPlanInput, WorkflowSession,
 };
 use crate::storage_yaml::{
     append_json_line, ensure_dir, get_workflow_paths, now_iso, path_exists, read_git_branch,
@@ -963,6 +963,69 @@ pub fn get_project(root: &str) -> Result<ProjectDetail> {
     })
 }
 
+fn activity_sort_key(timestamp: &str) -> i64 {
+    chrono::DateTime::parse_from_rfc3339(timestamp)
+        .map(|value| value.timestamp_millis())
+        .unwrap_or(i64::MIN)
+}
+
+pub fn get_board_project_detail(root: &str) -> Result<BoardProjectDetail> {
+    let plan = read_plan(root)?;
+    let runtime = read_runtime(root)?;
+    let sessions = read_sessions(root)?
+        .sessions
+        .into_iter()
+        .filter(|session| session.status == SessionStatus::Active)
+        .collect::<Vec<_>>();
+    let mut recent_activity = read_activity(root)?;
+    recent_activity.sort_by(|left, right| {
+        activity_sort_key(&right.timestamp).cmp(&activity_sort_key(&left.timestamp))
+    });
+    recent_activity.truncate(5);
+
+    let mut active_step_lookup = BTreeMap::new();
+    for session in &sessions {
+        let Some(step_id) = session.owned_step_id.as_deref() else {
+            continue;
+        };
+        let Some((_, _, _, step)) = locate_step(&plan, step_id) else {
+            continue;
+        };
+        active_step_lookup.entry(step.id.clone()).or_insert(BoardStepDetail {
+            title: step.title.clone(),
+            summary: step.summary.clone(),
+        });
+    }
+    if let Some(step_id) = runtime.current_step_id.as_deref() {
+        if let Some((_, _, _, step)) = locate_step(&plan, step_id) {
+            active_step_lookup.entry(step.id.clone()).or_insert(BoardStepDetail {
+                title: step.title.clone(),
+                summary: step.summary.clone(),
+            });
+        }
+    }
+
+    Ok(BoardProjectDetail {
+        root: root.to_string(),
+        sessions,
+        runtime_next_action: runtime.next_action,
+        blockers: runtime.blockers,
+        recent_activity,
+        active_step_lookup,
+    })
+}
+
+fn refreshed_indexed_summary(record: ProjectIndexRecord) -> Result<ProjectSummary> {
+    if path_exists(&record.summary.root) {
+        return build_project_summary(&record.summary.root);
+    }
+
+    let mut summary = record.summary;
+    summary.missing = true;
+    summary.stale = true;
+    Ok(summary)
+}
+
 pub fn list_projects(roots: &[String], index_db_path: Option<&str>) -> Result<Vec<ProjectSummary>> {
     let discovered_roots = discover_git_repos(roots)?;
     let mut summaries = Vec::new();
@@ -981,6 +1044,10 @@ pub fn list_projects(roots: &[String], index_db_path: Option<&str>) -> Result<Ve
     if let Some(index_db_path) = index_db_path {
         let store = IndexStore::new(index_db_path.to_string())?;
         store.mark_missing_projects(roots, &discovered_roots)?;
+        let scanned_at = now_iso();
+        for watched_root in roots {
+            store.record_watched_root_scan(watched_root, &scanned_at)?;
+        }
         return Ok(store
             .list_projects(roots)?
             .into_iter()
@@ -989,6 +1056,25 @@ pub fn list_projects(roots: &[String], index_db_path: Option<&str>) -> Result<Ve
     }
 
     Ok(summaries)
+}
+
+pub fn list_indexed_projects(roots: &[String], index_db_path: &str) -> Result<Vec<ProjectSummary>> {
+    let store = IndexStore::new(index_db_path.to_string())?;
+    store
+        .list_projects(roots)?
+        .into_iter()
+        .map(refreshed_indexed_summary)
+        .collect()
+}
+
+pub fn missing_watched_root_coverage(roots: &[String], index_db_path: &str) -> Result<Vec<String>> {
+    let store = IndexStore::new(index_db_path.to_string())?;
+    store.missing_watched_root_coverage(roots)
+}
+
+pub fn remove_watched_root_index_state(watched_root: &str, index_db_path: &str) -> Result<()> {
+    let store = IndexStore::new(index_db_path.to_string())?;
+    store.remove_watched_root(watched_root)
 }
 
 pub fn ensure_session(input: EnsureSessionInput) -> Result<ProjectDetail> {
@@ -1797,6 +1883,155 @@ mod tests {
             index_db_path: Some(index_db),
         })?;
         assert_eq!(second.plan.phases[0].steps[0].id, step_id);
+        Ok(())
+    }
+
+    #[test]
+    fn snapshot_only_returns_indexed_projects_until_refresh_runs() -> Result<()> {
+        let watched_root_dir = tempdir()?;
+        let watched_root = watched_root_dir.path().join("watched");
+        fs::create_dir_all(&watched_root)?;
+
+        let repo_one = watched_root.join("repo-one");
+        fs::create_dir_all(repo_one.join(".git"))?;
+        fs::write(repo_one.join(".git/HEAD"), "ref: refs/heads/main\n")?;
+
+        let index_db = watched_root.join(".app/index.sqlite").display().to_string();
+        init_project(InitProjectInput {
+            root: repo_one.display().to_string(),
+            actor: "tester".to_string(),
+            source: ActivitySource::Cli,
+            name: Some("Repo One".to_string()),
+            kind: None,
+            owner: None,
+            tags: None,
+            index_db_path: Some(index_db.clone()),
+        })?;
+
+        let roots = vec![watched_root.display().to_string()];
+        assert_eq!(missing_watched_root_coverage(&roots, &index_db)?, roots);
+
+        let refreshed = list_projects(&roots, Some(&index_db))?;
+        assert_eq!(refreshed.len(), 1);
+        assert!(missing_watched_root_coverage(&roots, &index_db)?.is_empty());
+
+        let repo_two = watched_root.join("repo-two");
+        fs::create_dir_all(repo_two.join(".git"))?;
+        fs::write(repo_two.join(".git/HEAD"), "ref: refs/heads/main\n")?;
+
+        let snapshot = list_indexed_projects(&roots, &index_db)?;
+        assert_eq!(snapshot.len(), 1);
+        assert!(snapshot[0].root.ends_with("/watched/repo-one"));
+
+        let refreshed_again = list_projects(&roots, Some(&index_db))?;
+        assert_eq!(refreshed_again.len(), 2);
+        assert!(refreshed_again
+            .iter()
+            .any(|summary| summary.root.ends_with("/watched/repo-two")));
+        Ok(())
+    }
+
+    #[test]
+    fn board_projection_filters_active_sessions_and_trims_recent_activity() -> Result<()> {
+        let repo = create_real_repo("parallel-project")?;
+        let index_db = Path::new(&repo).join(".app/index.sqlite").display().to_string();
+        init_project(InitProjectInput {
+            root: repo.clone(),
+            actor: "tester".to_string(),
+            source: ActivitySource::Cli,
+            name: Some("Parallel".to_string()),
+            kind: None,
+            owner: None,
+            tags: None,
+            index_db_path: Some(index_db.clone()),
+        })?;
+
+        let detail = get_project(&repo)?;
+        let first_step_id = detail.plan.phases[0].steps[0].id.clone();
+        let active = start_step(
+            &repo,
+            &first_step_id,
+            MutationActor {
+                actor: "agent-1".to_string(),
+                source: ActivitySource::Agent,
+            },
+            SessionContextInput::default(),
+            Some(&index_db),
+        )?;
+        add_blocker(
+            &repo,
+            "Need sign-off",
+            MutationActor {
+                actor: "agent-1".to_string(),
+                source: ActivitySource::Agent,
+            },
+            SessionContextInput::default(),
+            Some(&index_db),
+        )?;
+
+        let paths = get_workflow_paths(&repo);
+        write_text_atomic(&paths.activity_path, "")?;
+        for minute in [1, 6, 3, 5, 2, 4] {
+            append_json_line(
+                &paths.activity_path,
+                &json!({
+                    "timestamp": format!("2026-04-16T19:{minute:02}:00Z"),
+                    "actor": "agent-1",
+                    "source": "agent",
+                    "project_id": active.manifest.id,
+                    "session_id": active.sessions.first().map(|session| session.id.clone()),
+                    "step_id": first_step_id,
+                    "subtask_id": null,
+                    "type": "note",
+                    "summary": format!("Event {minute}"),
+                    "payload": {}
+                }),
+            )?;
+        }
+
+        let mut paused = read_sessions(&repo)?;
+        if let Some(session) = paused.sessions.first_mut() {
+            session.status = SessionStatus::Paused;
+        }
+        paused.sessions.push(WorkflowSession {
+            id: "active-session".to_string(),
+            title: "Active session".to_string(),
+            actor: "agent-2".to_string(),
+            source: ActivitySource::Agent,
+            branch: Some("main".to_string()),
+            status: SessionStatus::Active,
+            owned_step_id: Some(first_step_id.clone()),
+            observed_step_ids: Vec::new(),
+            started_at: "2026-04-16T19:00:00Z".to_string(),
+            last_updated_at: "2026-04-16T19:07:00Z".to_string(),
+        });
+        write_yaml_atomic(paths.sessions_path, &paused)?;
+
+        let board = get_board_project_detail(&repo)?;
+        assert_eq!(board.root, repo);
+        assert_eq!(board.sessions.len(), 1);
+        assert_eq!(board.sessions[0].id, "active-session");
+        assert_eq!(board.blockers, vec!["Need sign-off"]);
+        assert_eq!(
+            board.runtime_next_action,
+            "Write the initial problem statement and success criteria."
+        );
+        assert_eq!(board.recent_activity.len(), 5);
+        assert_eq!(
+            board
+                .recent_activity
+                .iter()
+                .map(|event| event.summary.clone())
+                .collect::<Vec<_>>(),
+            vec!["Event 6", "Event 5", "Event 4", "Event 3", "Event 2"]
+        );
+        assert_eq!(
+            board.active_step_lookup.get(&first_step_id),
+            Some(&BoardStepDetail {
+                title: "Capture requirements".to_string(),
+                summary: "Write the initial problem statement and success criteria.".to_string(),
+            })
+        );
         Ok(())
     }
 }

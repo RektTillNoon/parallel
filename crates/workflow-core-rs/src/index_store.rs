@@ -52,6 +52,11 @@ impl IndexStore {
               pending_proposal_count INTEGER NOT NULL,
               last_seen_at TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS watched_root_scans (
+              watched_root TEXT PRIMARY KEY,
+              last_scanned_at TEXT NOT NULL
+            );
             "#,
         )?;
         Ok(())
@@ -132,6 +137,63 @@ impl IndexStore {
                 )?;
             }
         }
+        Ok(())
+    }
+
+    pub fn record_watched_root_scan(&self, watched_root: &str, scanned_at: &str) -> Result<()> {
+        let conn = self.connection()?;
+        conn.execute(
+            r#"
+            INSERT INTO watched_root_scans (watched_root, last_scanned_at)
+            VALUES (?1, ?2)
+            ON CONFLICT(watched_root) DO UPDATE SET
+              last_scanned_at = excluded.last_scanned_at
+            "#,
+            params![watched_root, scanned_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn missing_watched_root_coverage(&self, watched_roots: &[String]) -> Result<Vec<String>> {
+        if watched_roots.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let placeholders = (0..watched_roots.len())
+            .map(|index| format!("?{}", index + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT watched_root FROM watched_root_scans WHERE watched_root IN ({placeholders})"
+        );
+        let conn = self.connection()?;
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(watched_roots.iter()), |row| {
+            row.get::<_, String>(0)
+        })?;
+
+        let mut covered = std::collections::HashSet::new();
+        for row in rows {
+            covered.insert(row?);
+        }
+
+        Ok(watched_roots
+            .iter()
+            .filter(|root| !covered.contains(root.as_str()))
+            .cloned()
+            .collect())
+    }
+
+    pub fn remove_watched_root(&self, watched_root: &str) -> Result<()> {
+        let conn = self.connection()?;
+        conn.execute(
+            "DELETE FROM projects WHERE watched_root = ?1",
+            params![watched_root],
+        )?;
+        conn.execute(
+            "DELETE FROM watched_root_scans WHERE watched_root = ?1",
+            params![watched_root],
+        )?;
         Ok(())
     }
 

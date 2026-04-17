@@ -166,8 +166,23 @@ export interface ProjectDetail {
   decisions: AcceptedDecision[];
 }
 
+export interface BoardStepDetail {
+  title: string;
+  summary: string;
+}
+
+export interface BoardProjectDetail {
+  root: string;
+  sessions: WorkflowSession[];
+  runtimeNextAction: string;
+  blockers: string[];
+  recentActivity: ActivityEvent[];
+  activeStepLookup: Record<string, BoardStepDetail>;
+}
+
 export interface LoadStatePayload {
   settings: SettingsPayload;
   projects: ProjectSummary[];
+  boardProjects: BoardProjectDetail[];
   mcpRuntime: BridgeRuntime;
 }
