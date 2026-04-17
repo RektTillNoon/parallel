@@ -155,6 +155,39 @@ fn ensure_human_authority(parsed: &ParsedArgs) -> Result<()> {
     bail!("decision accept requires explicit human authority via --source human")
 }
 
+fn help_payload() -> JsonValue {
+    let default_index_db = canonical_index_db_path().map(|path| path.to_string_lossy().into_owned());
+    serde_json::json!({
+      "commands": [
+        "projectctl init [--root PATH] [--name NAME]",
+        "projectctl list [ROOT ...]",
+        "projectctl show [--root PATH]",
+        "projectctl step start <step-id> [--root PATH]",
+        "projectctl step done <step-id> [--root PATH]",
+        "projectctl session ensure [--root PATH]",
+        "projectctl plan sync --plan JSON [--root PATH]",
+        "projectctl activity add --type TYPE [--summary TEXT] [--root PATH]",
+        "projectctl blocker add <summary> [--root PATH]",
+        "projectctl blocker clear [summary] [--root PATH]",
+        "projectctl note add <summary> [--root PATH]",
+        "projectctl handoff refresh [--root PATH]",
+        "projectctl decision propose --title TITLE --context TEXT --decision TEXT --impact TEXT [--root PATH]",
+        "projectctl mcp serve-http --port PORT --token TOKEN",
+        "projectctl mcp proxy-stdio --url URL --token TOKEN"
+      ],
+      "indexDb": {
+        "flag": "--index-db",
+        "envVar": "PROJECT_WORKFLOW_INDEX_DB",
+        "defaultPath": default_index_db,
+        "precedence": [
+          "--index-db",
+          "PROJECT_WORKFLOW_INDEX_DB",
+          "canonical default path"
+        ]
+      }
+    })
+}
+
 fn phase_inputs_from_json(value: &Value) -> Result<Vec<PlanSyncPhaseInput>> {
     let phases = if let Some(array) = value.as_array() {
         array.clone()
@@ -460,26 +493,7 @@ fn run() -> Result<()> {
             print_result(&result, json)
         }
         _ => {
-            let commands = serde_json::json!({
-              "commands": [
-                "projectctl init [--root PATH] [--name NAME]",
-                "projectctl list [ROOT ...]",
-                "projectctl show [--root PATH]",
-                "projectctl step start <step-id> [--root PATH]",
-                "projectctl step done <step-id> [--root PATH]",
-                "projectctl session ensure [--root PATH]",
-                "projectctl plan sync --plan JSON [--root PATH]",
-                "projectctl activity add --type TYPE [--summary TEXT] [--root PATH]",
-                "projectctl blocker add <summary> [--root PATH]",
-                "projectctl blocker clear [summary] [--root PATH]",
-                "projectctl note add <summary> [--root PATH]",
-                "projectctl handoff refresh [--root PATH]",
-                "projectctl decision propose --title TITLE --context TEXT --decision TEXT --impact TEXT [--root PATH]",
-                "projectctl mcp serve-http --port PORT --token TOKEN",
-                "projectctl mcp proxy-stdio --url URL --token TOKEN"
-              ]
-            });
-            print_result(&commands, true)?;
+            print_result(&help_payload(), true)?;
             process::exit(if command.is_some() { 1 } else { 0 });
         }
     }
@@ -517,5 +531,15 @@ mod tests {
             ),
             Some("/tmp/from-default.sqlite".to_string())
         );
+    }
+
+    #[test]
+    fn help_payload_describes_index_db_contract() {
+        let payload = help_payload();
+
+        assert_eq!(payload["indexDb"]["flag"], "--index-db");
+        assert_eq!(payload["indexDb"]["envVar"], "PROJECT_WORKFLOW_INDEX_DB");
+        assert_eq!(payload["indexDb"]["precedence"][0], "--index-db");
+        assert!(payload["indexDb"]["defaultPath"].is_string() || payload["indexDb"]["defaultPath"].is_null());
     }
 }
