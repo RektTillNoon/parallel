@@ -5,8 +5,9 @@ use std::{env, path::PathBuf, process};
 use anyhow::{anyhow, bail, Result};
 use parallel_workflow_core::{
     accept_decision, add_blocker, add_note, append_activity_event, clear_blocker, complete_step,
-    ensure_session, get_project, init_project, list_projects, propose_decision, refresh_handoff,
-    start_step, sync_plan, update_runtime, ActivitySource, AppendActivityInput,
+    canonical_index_db_path, ensure_session, get_project, init_project, list_projects,
+    propose_decision, refresh_handoff, start_step, sync_plan, update_runtime, ActivitySource,
+    AppendActivityInput,
     DecisionProposalInput, EnsureSessionInput, InitProjectInput, MutationActor, PlanSyncPhaseInput,
     PlanSyncStepInput, PlanSyncSubtaskInput, RuntimePatchInput, SessionContextInput, SyncPlanInput,
 };
@@ -94,8 +95,20 @@ fn resolve_root(parsed: &ParsedArgs) -> String {
     root.canonicalize().unwrap_or(root).to_string_lossy().into_owned()
 }
 
+fn resolve_index_db_from_sources(
+    flag_index_db: Option<String>,
+    env_index_db: Option<String>,
+    canonical_default: Option<String>,
+) -> Option<String> {
+    flag_index_db.or(env_index_db).or(canonical_default)
+}
+
 fn resolve_index_db(parsed: &ParsedArgs) -> Option<String> {
-    flag(parsed, "index-db").or_else(|| env::var("PROJECT_WORKFLOW_INDEX_DB").ok())
+    resolve_index_db_from_sources(
+        flag(parsed, "index-db"),
+        env::var("PROJECT_WORKFLOW_INDEX_DB").ok(),
+        canonical_index_db_path().map(|path| path.to_string_lossy().into_owned()),
+    )
 }
 
 fn resolve_roots(parsed: &ParsedArgs) -> Vec<String> {
@@ -469,5 +482,40 @@ fn run() -> Result<()> {
             print_result(&commands, true)?;
             process::exit(if command.is_some() { 1 } else { 0 });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_index_db_prefers_flag_then_env_then_canonical_default() {
+        assert_eq!(
+            resolve_index_db_from_sources(
+                Some("/tmp/from-flag.sqlite".to_string()),
+                Some("/tmp/from-env.sqlite".to_string()),
+                Some("/tmp/from-default.sqlite".to_string()),
+            ),
+            Some("/tmp/from-flag.sqlite".to_string())
+        );
+
+        assert_eq!(
+            resolve_index_db_from_sources(
+                None,
+                Some("/tmp/from-env.sqlite".to_string()),
+                Some("/tmp/from-default.sqlite".to_string()),
+            ),
+            Some("/tmp/from-env.sqlite".to_string())
+        );
+
+        assert_eq!(
+            resolve_index_db_from_sources(
+                None,
+                None,
+                Some("/tmp/from-default.sqlite".to_string()),
+            ),
+            Some("/tmp/from-default.sqlite".to_string())
+        );
     }
 }

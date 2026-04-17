@@ -23,6 +23,7 @@ use parallel_workflow_core::{
     list_projects, missing_watched_root_coverage, propose_decision,
     remove_watched_root_index_state, start_step, ActivitySource, BoardProjectDetail,
     DecisionProposalInput, InitProjectInput, MutationActor, ProjectSummary, SessionContextInput,
+    canonical_index_db_path, CANONICAL_INDEX_DB_FILE,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{
@@ -81,6 +82,34 @@ const DEFAULT_PROJECT_KIND: &str = "software";
 
 fn app_support_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path().app_data_dir().map_err(|error| error.to_string())
+}
+
+fn finalize_desktop_index_path(
+    legacy_index_path: PathBuf,
+    canonical_index_path: Option<PathBuf>,
+) -> Result<PathBuf, String> {
+    let resolved = canonical_index_path.unwrap_or_else(|| legacy_index_path.clone());
+    if let Some(parent) = resolved.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    if resolved != legacy_index_path && legacy_index_path.exists() && !resolved.exists() {
+        match fs::rename(&legacy_index_path, &resolved) {
+            Ok(()) => {}
+            Err(_) => {
+                fs::copy(&legacy_index_path, &resolved).map_err(|error| error.to_string())?;
+                fs::remove_file(&legacy_index_path).map_err(|error| error.to_string())?;
+            }
+        }
+    }
+    Ok(resolved)
+}
+
+fn resolve_desktop_index_db_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let support_dir = app_support_dir(app)?;
+    finalize_desktop_index_path(
+        support_dir.join(CANONICAL_INDEX_DB_FILE),
+        canonical_index_db_path(),
+    )
 }
 
 fn ensure_settings(state: &AppState) -> Result<Settings, String> {
@@ -1112,9 +1141,10 @@ fn main() {
         .setup(|app| {
             let support_dir = app_support_dir(app.handle())?;
             fs::create_dir_all(&support_dir).map_err(|error| error.to_string())?;
+            let index_db_path = resolve_desktop_index_db_path(app.handle())?;
             let state = AppState {
                 settings_path: support_dir.join("settings.json"),
-                index_db_path: support_dir.join("workflow-index.sqlite"),
+                index_db_path,
                 watcher: Mutex::new(None),
                 tray_handles: Mutex::new(None),
                 bridge: Mutex::new(BridgeSupervisor {
@@ -1346,5 +1376,21 @@ mod tests {
             .iter()
             .any(|project| project.root.ends_with("/watched-root/repo-two")));
         assert_eq!(refreshed_again.board_projects.len(), 1);
+    }
+
+    #[test]
+    fn desktop_index_path_migrates_legacy_index_to_canonical_location() {
+        let base = unique_temp_dir("index-migration");
+        let legacy_index = base.join("legacy").join("workflow-index.sqlite");
+        let canonical_index = base.join("canonical").join("workflow-index.sqlite");
+        fs::create_dir_all(legacy_index.parent().expect("legacy parent")).expect("legacy dir should create");
+        fs::write(&legacy_index, "legacy").expect("legacy index should write");
+
+        let resolved = finalize_desktop_index_path(legacy_index.clone(), Some(canonical_index.clone()))
+            .expect("index path should resolve");
+
+        assert_eq!(resolved, canonical_index);
+        assert!(!legacy_index.exists());
+        assert_eq!(fs::read_to_string(&canonical_index).expect("canonical index should exist"), "legacy");
     }
 }

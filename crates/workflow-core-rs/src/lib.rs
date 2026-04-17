@@ -1,11 +1,13 @@
 mod decisions;
 mod discovery;
 mod handoff;
+mod index_path;
 mod index_store;
 mod models;
 mod services;
 mod storage_yaml;
 
+pub use index_path::{canonical_index_db_path, CANONICAL_INDEX_DB_FILE};
 pub use models::{
     AcceptedDecision, ActivityEvent, ActivitySource, AppendActivityInput, BoardProjectDetail,
     BoardStepDetail, DecisionProposal, DecisionProposalInput, DecisionProposalStatus,
