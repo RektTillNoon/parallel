@@ -71,7 +71,7 @@ describe('Nothing-style typography contract', () => {
     expect(styles).toMatch(/\.context-activity-dot\s*{[^}]*border-radius:\s*999px;/s);
   });
 
-  it('lights the sidebar repo rows with a leading status glyph', () => {
+  it('lights the sidebar project rows with a leading status glyph', () => {
     expect(styles).toMatch(/\.project-status-dot\s*{[^}]*border-radius:\s*999px;/s);
     expect(styles).toMatch(/\.project-status-dot\[data-status="in_progress"\][\s\S]*background:\s*var\(--accent\);/s);
     expect(styles).toMatch(/\.project-row-lead\s*{[^}]*display:\s*inline-flex;/s);

@@ -89,8 +89,8 @@ export function choosePrimaryBoardRow(
   if (selectedRoot) {
     return (
       board.rows.find(
-        (row) => row.repoRoot === selectedRoot && row.sessionId === selectedSessionId,
-      ) ?? board.rows.find((row) => row.repoRoot === selectedRoot) ?? null
+        (row) => row.projectRoot === selectedRoot && row.sessionId === selectedSessionId,
+      ) ?? board.rows.find((row) => row.projectRoot === selectedRoot) ?? null
     );
   }
 
@@ -103,7 +103,7 @@ export function resolveSelectedSessionId(selectedBoardRow: SessionBoardRow | nul
 
 export function resolveBoardSelectionFromRow(selectedRow: SessionBoardRow | null) {
   return {
-    selectedRoot: selectedRow?.repoRoot ?? null,
+    selectedRoot: selectedRow?.projectRoot ?? null,
     selectedSessionId: selectedRow?.sessionId ?? null,
   };
 }
@@ -113,6 +113,10 @@ export function projectCollectionSummary(watchedRootCount: number, projectCount:
 }
 
 export const projectSectionLabel = 'Projects';
+export const projectInitPrompt = 'Initialize workflow for this project.';
+export const activeSessionsSubtitle = 'Live log of work in motion across watched projects.';
+export const activeProjectsMetricLabel = 'Projects live';
+export const noProjectsInRootsMessage = 'No projects in current roots.';
 
 export function projectDiscoverySubtitle(project: ProjectSummary) {
   if (project.initialized || !project.discoverySource || project.discoverySource === 'parallel') {
@@ -211,11 +215,11 @@ function padCount(value: number) {
 type SidebarProps = {
   projects: ProjectSummary[];
   selectedRoot: string | null;
-  reposOpen: boolean;
+  projectsOpen: boolean;
   settingsOpen: boolean;
   watchedRootCount: number;
   onSync: () => void;
-  onToggleRepos: () => void;
+  onToggleProjects: () => void;
   onSelectProject: (project: ProjectSummary) => void;
   onToggleSettings: () => void;
 };
@@ -223,11 +227,11 @@ type SidebarProps = {
 const Sidebar = memo(function Sidebar({
   projects,
   selectedRoot,
-  reposOpen,
+  projectsOpen,
   settingsOpen,
   watchedRootCount,
   onSync,
-  onToggleRepos,
+  onToggleProjects,
   onSelectProject,
   onToggleSettings,
 }: SidebarProps) {
@@ -248,9 +252,9 @@ const Sidebar = memo(function Sidebar({
       </div>
       <CollapsibleSection
         label={projectSectionLabel}
-        open={reposOpen}
-        onToggle={onToggleRepos}
-        className="sidebar-block repos-toggle"
+        open={projectsOpen}
+        onToggle={onToggleProjects}
+        className="sidebar-block projects-toggle"
         count={projects.length}
       >
         <div className="project-list">
@@ -313,7 +317,7 @@ export default function App() {
   const [rootsOpen, setRootsOpen] = useState(false);
   const [bridgeOpen, setBridgeOpen] = useState(true);
   const [cliOpen, setCliOpen] = useState(false);
-  const [reposOpen, setReposOpen] = useState(true);
+  const [projectsOpen, setProjectsOpen] = useState(true);
   const [cliStatus, setCliStatus] = useState<CliInstallStatus | null>(null);
   const [cliPending, setCliPending] = useState(false);
   const reloadInFlight = useRef(false);
@@ -718,7 +722,7 @@ export default function App() {
     })();
   }, [applyLoadState]);
 
-  const handleToggleRepos = useCallback(() => setReposOpen((open) => !open), []);
+  const handleToggleProjects = useCallback(() => setProjectsOpen((open) => !open), []);
   const handleToggleSettings = useCallback(() => setSettingsOpen((open) => !open), []);
   const handleCloseSettings = useCallback(() => setSettingsOpen(false), []);
   const handleToggleRoots = useCallback(() => setRootsOpen((open) => !open), []);
@@ -736,7 +740,7 @@ export default function App() {
     const nextSelection = resolveBoardSelectionFromRow(row);
     setSelectedRoot(nextSelection.selectedRoot);
     setSelectedSessionId(nextSelection.selectedSessionId);
-    void setLastFocusedProject(row.repoRoot).catch((selectionError) => {
+    void setLastFocusedProject(row.projectRoot).catch((selectionError) => {
       setError(selectionError instanceof Error ? selectionError.message : String(selectionError));
     });
   }, []);
@@ -770,11 +774,11 @@ export default function App() {
       <Sidebar
         projects={state?.projects ?? []}
         selectedRoot={selectedRoot}
-        reposOpen={reposOpen}
+        projectsOpen={projectsOpen}
         settingsOpen={settingsOpen}
         watchedRootCount={state?.settings.watchedRoots.length ?? 0}
         onSync={handleSync}
-        onToggleRepos={handleToggleRepos}
+        onToggleProjects={handleToggleProjects}
         onSelectProject={handleProjectSelection}
         onToggleSettings={handleToggleSettings}
       />
@@ -786,7 +790,7 @@ export default function App() {
           <section className="panel init-panel">
             <h2>{selectedSummary.name}</h2>
             <p className="muted">{selectedSummary.root}</p>
-            <p>Initialize workflow for this repo.</p>
+            <p>{projectInitPrompt}</p>
             <form
               className="inline-form"
               onSubmit={(event) => {
@@ -809,7 +813,7 @@ export default function App() {
             <section className="board-topline">
               <div>
                 <h2>Active sessions</h2>
-                <p className="muted">Live log of work in motion across watched repos.</p>
+                <p className="muted">{activeSessionsSubtitle}</p>
               </div>
               <dl className="board-metrics" aria-label="Board totals">
                 <div>
@@ -822,7 +826,7 @@ export default function App() {
                 </div>
                 <div>
                   <dd>{padCount(state?.projects.filter((project) => project.activeSessionCount > 0).length ?? 0)}</dd>
-                  <dt>Repos live</dt>
+                  <dt>{activeProjectsMetricLabel}</dt>
                 </div>
                 <div>
                   <dd className="board-metrics-time">{formatShortDuration(board.rows[0]?.lastUpdatedAt)}</dd>
@@ -850,7 +854,7 @@ export default function App() {
         ) : null}
         {!loading && !board.rows.length && !selectedSummary ? (
           <div className="empty-state">
-            {noProjectsDiscovered ? 'No repos in current roots.' : 'Add a root to start.'}
+            {noProjectsDiscovered ? noProjectsInRootsMessage : 'Add a root to start.'}
           </div>
         ) : null}
       </main>

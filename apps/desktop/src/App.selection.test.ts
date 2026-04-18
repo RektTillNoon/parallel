@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  activeProjectsMetricLabel,
+  activeSessionsSubtitle,
   choosePrimaryBoardRow,
+  noProjectsInRootsMessage,
   projectDiscoverySubtitle,
+  projectInitPrompt,
   projectCollectionSummary,
   projectSectionLabel,
   projectSourceLabel,
@@ -17,8 +21,8 @@ const board: SessionBoardData = {
     {
       sessionId: 'session-1',
       sessionTitle: 'Parallel session',
-      repoRoot: '/Users/light/Projects/parallel',
-      repoName: 'parallel',
+      projectRoot: '/Users/light/Projects/parallel',
+      projectName: 'parallel',
       stepId: 'capture-requirements',
       stepTitle: 'Capture requirements',
       summary: 'Write the initial problem statement.',
@@ -28,8 +32,8 @@ const board: SessionBoardData = {
     {
       sessionId: 'session-2',
       sessionTitle: 'Notes session',
-      repoRoot: '/Users/light/Projects/notes',
-      repoName: 'notes',
+      projectRoot: '/Users/light/Projects/notes',
+      projectName: 'notes',
       stepId: 'draft-outline',
       stepTitle: 'Draft outline',
       summary: 'Draft the outline.',
@@ -40,7 +44,7 @@ const board: SessionBoardData = {
 };
 
 describe('choosePrimaryBoardRow', () => {
-  it('retargets stale session selection when the repo root changes', () => {
+  it('retargets stale session selection when the project root changes', () => {
     const row = choosePrimaryBoardRow(
       board,
       '/Users/light/Projects/notes',
@@ -48,20 +52,20 @@ describe('choosePrimaryBoardRow', () => {
     );
 
     expect(row?.sessionId).toBe('session-2');
-    expect(row?.repoRoot).toBe('/Users/light/Projects/notes');
+    expect(row?.projectRoot).toBe('/Users/light/Projects/notes');
   });
 
-  it('does not fall back to another repo when the selected root has no rows', () => {
+  it('does not fall back to another project when the selected root has no rows', () => {
     const row = choosePrimaryBoardRow(board, '/Users/light/Projects/ghost', 'session-1');
 
     expect(row).toBeNull();
   });
 
-  it('preserves the selected session when it still belongs to the selected repo', () => {
+  it('preserves the selected session when it still belongs to the selected project', () => {
     const row = choosePrimaryBoardRow(board, '/Users/light/Projects/parallel', 'session-1');
 
     expect(row?.sessionId).toBe('session-1');
-    expect(row?.repoRoot).toBe('/Users/light/Projects/parallel');
+    expect(row?.projectRoot).toBe('/Users/light/Projects/parallel');
   });
 
   it('syncs the selected session id directly from the chosen board row', () => {
@@ -77,7 +81,7 @@ describe('choosePrimaryBoardRow', () => {
 });
 
 describe('resolveBoardSelectionFromRow', () => {
-  it('keeps repo and session selection aligned to the clicked ledger row', () => {
+  it('keeps project and session selection aligned to the clicked ledger row', () => {
     expect(resolveBoardSelectionFromRow(board.rows[1])).toEqual({
       selectedRoot: '/Users/light/Projects/notes',
       selectedSessionId: 'session-2',
@@ -89,6 +93,13 @@ describe('project copy helpers', () => {
   it('describes the sidebar collection as projects', () => {
     expect(projectCollectionSummary(2, 5)).toBe('2 roots · 5 projects');
     expect(projectSectionLabel).toBe('Projects');
+  });
+
+  it('keeps the remaining desktop copy aligned to project language', () => {
+    expect(projectInitPrompt).toBe('Initialize workflow for this project.');
+    expect(activeSessionsSubtitle).toBe('Live log of work in motion across watched projects.');
+    expect(activeProjectsMetricLabel).toBe('Projects live');
+    expect(noProjectsInRootsMessage).toBe('No projects in current roots.');
   });
 
   it('shows provenance subtitles only for external-tool candidates', () => {

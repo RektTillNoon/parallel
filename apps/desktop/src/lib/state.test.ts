@@ -60,14 +60,14 @@ const baseState: LoadStatePayload = {
 };
 
 describe('resolveSelectionState', () => {
-  it('auto-selects the first repo when nothing is focused', () => {
+  it('auto-selects the first project when nothing is focused', () => {
     const result = resolveSelectionState(baseState);
 
     expect(result.selectedRoot).toBe('/Users/light/Projects/baryon');
     expect(result.selectedProject?.initialized).toBe(false);
   });
 
-  it('returns the initialized repo when the selected project is active', () => {
+  it('returns the initialized project when the selected project is active', () => {
     const initializedState: LoadStatePayload = {
       ...baseState,
       projects: [
@@ -84,7 +84,7 @@ describe('resolveSelectionState', () => {
     expect(result.selectedProject?.initialized).toBe(true);
   });
 
-  it('keeps the last focused initialized repo selected', () => {
+  it('keeps the last focused initialized project selected', () => {
     const state = {
       settings: {
         watchedRoots: ['/Users/light/Projects'],
@@ -162,7 +162,7 @@ describe('resolveSelectionState', () => {
     expect(result.selectedProject?.root).toBe('/Users/light/Projects/parallel');
   });
 
-  it('falls back when the last focused repo is no longer loaded', () => {
+  it('falls back when the last focused project is no longer loaded', () => {
     const state = {
       ...baseState,
       settings: {

@@ -192,7 +192,7 @@ describe('buildSessionBoard', () => {
     expect(board.rows[0]).toMatchObject({
       sessionId: 'session-1',
       sessionTitle: 'Validate agent bridge from Codex',
-      repoName: 'parallel',
+      projectName: 'parallel',
       stepId: 'capture-requirements',
       stepTitle: 'Capture requirements',
       summary: 'Write the initial problem statement and success criteria.',
@@ -200,7 +200,7 @@ describe('buildSessionBoard', () => {
     });
     expect(board.rows[1]).toMatchObject({
       sessionId: 'session-4',
-      repoName: 'notes',
+      projectName: 'notes',
       stepId: null,
       stepTitle: 'No owned step',
       summary: 'Resolve the blocker before drafting the outline.',
@@ -208,7 +208,7 @@ describe('buildSessionBoard', () => {
     });
     expect(board.rows[2]).toMatchObject({
       sessionId: 'session-3',
-      repoName: 'notes',
+      projectName: 'notes',
       status: 'blocked',
     });
   });

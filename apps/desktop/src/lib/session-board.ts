@@ -3,8 +3,8 @@ import type { BoardProjectDetail, LoadStatePayload, WorkflowSession } from './ty
 export type SessionBoardRow = {
   sessionId: string;
   sessionTitle: string;
-  repoRoot: string;
-  repoName: string;
+  projectRoot: string;
+  projectName: string;
   stepId: string | null;
   stepTitle: string;
   summary: string;
@@ -43,8 +43,8 @@ export function buildSessionBoard(
       rows.push({
         sessionId: session.id,
         sessionTitle: session.title,
-        repoRoot: project.root,
-        repoName: project.name,
+        projectRoot: project.root,
+        projectName: project.name,
         stepId: session.owned_step_id,
         stepTitle: step?.title ?? 'No owned step',
         summary: step?.summary ?? detail.runtimeNextAction,

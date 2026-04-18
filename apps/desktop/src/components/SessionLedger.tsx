@@ -31,7 +31,7 @@ export default memo(function SessionLedger({
               <span className={`session-ledger-status status-${row.status}`}>{row.status}</span>
             </div>
             <div className="session-ledger-meta">
-              {row.repoName} · {row.stepTitle}
+              {row.projectName} · {row.stepTitle}
             </div>
             <div className="session-ledger-summary">{row.summary}</div>
           </div>
