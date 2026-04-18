@@ -1,6 +1,7 @@
 import type { ChangeEvent, FormEvent } from 'react';
 
 import type { BridgeStatusPresentation } from '../lib/state';
+import type { CliInstallStatus } from '../lib/types';
 
 import CollapsibleSection from './CollapsibleSection';
 
@@ -29,6 +30,12 @@ type SettingsModalProps = {
   onRestartBridge: () => void;
   onRegenerateBridgeToken: () => void;
   onCopyBridgeSnippet: (kind: string) => void;
+  cliOpen: boolean;
+  onToggleCli: () => void;
+  cliStatus: CliInstallStatus | null;
+  cliPending: boolean;
+  onInstallCli: () => void;
+  onCopyCliSetup: () => void;
 };
 
 export default function SettingsModal({
@@ -56,6 +63,12 @@ export default function SettingsModal({
   onRestartBridge,
   onRegenerateBridgeToken,
   onCopyBridgeSnippet,
+  cliOpen,
+  onToggleCli,
+  cliStatus,
+  cliPending,
+  onInstallCli,
+  onCopyCliSetup,
 }: SettingsModalProps) {
   if (!settingsOpen) {
     return null;
@@ -184,6 +197,67 @@ export default function SettingsModal({
               </button>
               <button type="button" onClick={() => onCopyBridgeSnippet('claudeDesktop')}>
                 Copy Claude Desktop setup
+              </button>
+            </div>
+          </section>
+        </CollapsibleSection>
+        <CollapsibleSection
+          label="CLI"
+          open={cliOpen}
+          onToggle={onToggleCli}
+          className="settings-section"
+        >
+          <section className="bridge-panel">
+            <div className="panel-header">
+              <div>
+                <h3>projectctl CLI</h3>
+                <p className="muted settings-copy">Install a Terminal command that points at the bundled CLI.</p>
+              </div>
+            </div>
+            <div className="bridge-meta">
+              <div>
+                <label>Status</label>
+                <strong className={`status status-${cliStatus?.installed && cliStatus?.installDirOnPath ? 'positive' : 'caution'}`}>
+                  {cliStatus
+                    ? cliStatus.installed
+                      ? cliStatus.installDirOnPath
+                        ? 'Ready'
+                        : 'Installed, PATH update needed'
+                      : 'Not installed'
+                    : 'Checking…'}
+                </strong>
+              </div>
+              <div>
+                <label>Install path</label>
+                <code className="bridge-url">{cliStatus?.installPath ?? 'Checking…'}</code>
+              </div>
+              <div>
+                <label>Bundled binary</label>
+                <code className="bridge-url">{cliStatus?.bundledPath ?? 'Checking…'}</code>
+              </div>
+            </div>
+            {cliStatus && !cliStatus.installDirOnPath ? (
+              <div className="bridge-warning">
+                Add the install directory to your shell path. Profile: {cliStatus.shellProfile}
+              </div>
+            ) : null}
+            {cliStatus && !cliStatus.installDirOnPath ? (
+              <div className="root-list cli-setup-list">
+                <div className="root-row">
+                  <code>{cliStatus.persistCommand}</code>
+                </div>
+              </div>
+            ) : null}
+            <div className="bridge-actions">
+              <button type="button" onClick={onInstallCli} disabled={cliPending}>
+                {cliPending ? 'Installing…' : cliStatus?.installed ? 'Reinstall CLI' : 'Install CLI'}
+              </button>
+              <button
+                type="button"
+                onClick={onCopyCliSetup}
+                disabled={!cliStatus || cliStatus.installDirOnPath}
+              >
+                Copy shell setup
               </button>
             </div>
           </section>

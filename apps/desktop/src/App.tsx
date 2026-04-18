@@ -13,9 +13,11 @@ import {
 
 import {
   addWatchRoot,
+  getCliInstallStatus,
   getBridgeClientSnippets,
   getBridgeStatus,
   initProject,
+  installCli,
   loadState,
   refreshProjects,
   regenerateBridgeToken,
@@ -42,6 +44,7 @@ import SessionLedger from './components/SessionLedger';
 import type {
   BoardProjectDetail,
   BridgeStateEvent,
+  CliInstallStatus,
   LoadStatePayload,
   ProjectSummary,
 } from './lib/types';
@@ -273,7 +276,10 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [rootsOpen, setRootsOpen] = useState(false);
   const [bridgeOpen, setBridgeOpen] = useState(true);
+  const [cliOpen, setCliOpen] = useState(false);
   const [reposOpen, setReposOpen] = useState(true);
+  const [cliStatus, setCliStatus] = useState<CliInstallStatus | null>(null);
+  const [cliPending, setCliPending] = useState(false);
   const reloadInFlight = useRef(false);
   const reloadQueued = useRef<string | null | undefined>(undefined);
   const selectedRootRef = useRef<string | null>(null);
@@ -434,6 +440,30 @@ export default function App() {
     state?.settings.mcp.enabled,
     state?.mcpRuntime.status,
   ]);
+
+  useEffect(() => {
+    if (!settingsOpen || !isTauri()) {
+      return;
+    }
+
+    let active = true;
+    void (async () => {
+      try {
+        const status = await getCliInstallStatus();
+        if (active) {
+          setCliStatus(status);
+        }
+      } catch (cliError) {
+        if (active) {
+          setError(cliError instanceof Error ? cliError.message : String(cliError));
+        }
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [settingsOpen]);
 
   const selectedSummary = useMemo(() => {
     return state?.projects.find((project) => project.root === selectedRoot) ?? null;
@@ -614,6 +644,32 @@ export default function App() {
     }
   }, []);
 
+  const handleInstallCli = useCallback(async () => {
+    setError(null);
+    setCliPending(true);
+    try {
+      const status = await installCli();
+      setCliStatus(status);
+    } catch (installError) {
+      setError(installError instanceof Error ? installError.message : String(installError));
+    } finally {
+      setCliPending(false);
+    }
+  }, []);
+
+  const handleCopyCliSetup = useCallback(async () => {
+    if (!cliStatus) {
+      return;
+    }
+
+    setError(null);
+    try {
+      await navigator.clipboard.writeText(cliStatus.persistCommand);
+    } catch (copyError) {
+      setError(copyError instanceof Error ? copyError.message : String(copyError));
+    }
+  }, [cliStatus]);
+
   const handleSync = useCallback(() => {
     void (async () => {
       setError(null);
@@ -631,6 +687,7 @@ export default function App() {
   const handleCloseSettings = useCallback(() => setSettingsOpen(false), []);
   const handleToggleRoots = useCallback(() => setRootsOpen((open) => !open), []);
   const handleToggleBridge = useCallback(() => setBridgeOpen((open) => !open), []);
+  const handleToggleCli = useCallback(() => setCliOpen((open) => !open), []);
   const handleWatchRootInputChange = useCallback((value: string) => setWatchRootInput(value), []);
   const handleProjectSelection = useCallback(
     (project: ProjectSummary) => {
@@ -788,6 +845,12 @@ export default function App() {
             onRestartBridge={() => void handleRestartBridge()}
             onRegenerateBridgeToken={() => void handleRegenerateBridgeToken()}
             onCopyBridgeSnippet={(kind) => void handleCopyBridgeSnippet(kind)}
+            cliOpen={cliOpen}
+            onToggleCli={handleToggleCli}
+            cliStatus={cliStatus}
+            cliPending={cliPending}
+            onInstallCli={() => void handleInstallCli()}
+            onCopyCliSetup={() => void handleCopyCliSetup()}
           />
         </Suspense>
       ) : null}

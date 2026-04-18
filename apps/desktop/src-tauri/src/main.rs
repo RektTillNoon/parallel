@@ -13,7 +13,7 @@ use std::{
 };
 
 use bridge::{
-    build_client_snippet, clear_client_stale, find_available_port, generate_token,
+    build_client_snippet, bundled_sidecar_binary_filename, clear_client_stale, find_available_port, generate_token,
     mark_clients_stale, resolve_bridge_url, resolve_bundled_projectctl_path, BridgeRuntimeSnapshot,
     BridgeSettings, BridgeStateEvent, DEFAULT_BRIDGE_PORT, BRIDGE_EVENT,
 };
@@ -63,6 +63,18 @@ struct LoadStatePayload {
     projects: Vec<ProjectSummary>,
     board_projects: Vec<BoardProjectDetail>,
     mcp_runtime: BridgeRuntimeSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CliInstallStatus {
+    bundled_path: String,
+    install_path: String,
+    installed: bool,
+    install_dir_on_path: bool,
+    shell_export: String,
+    shell_profile: String,
+    persist_command: String,
 }
 
 #[derive(Clone)]
@@ -188,6 +200,148 @@ fn workflow_dir_prefix(root: &str) -> String {
 
 fn index_db_path_string(state: &AppState) -> String {
     state.index_db_path.to_string_lossy().into_owned()
+}
+
+fn user_home_dir() -> Result<PathBuf, String> {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or_else(|| "HOME is not set".to_string())
+}
+
+fn path_entries(raw: Option<&str>) -> Vec<PathBuf> {
+    raw.unwrap_or_default()
+        .split(if cfg!(windows) { ';' } else { ':' })
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .collect()
+}
+
+fn shell_profile_path(shell_env: Option<&str>, home_dir: &Path) -> PathBuf {
+    let shell = shell_env.unwrap_or_default();
+    if shell.contains("zsh") {
+        return home_dir.join(".zshrc");
+    }
+    if shell.contains("bash") {
+        return home_dir.join(".bashrc");
+    }
+    if shell.contains("fish") {
+        return home_dir.join(".config").join("fish").join("config.fish");
+    }
+    home_dir.join(".profile")
+}
+
+fn display_home_relative(path: &Path, home_dir: &Path) -> String {
+    path.strip_prefix(home_dir)
+        .map(|relative| format!("$HOME/{}", relative.display()))
+        .unwrap_or_else(|_| path.to_string_lossy().into_owned())
+}
+
+fn resolve_cli_install_path(path_env: Option<&str>, home_dir: &Path) -> PathBuf {
+    let home_bin = home_dir.join("bin");
+    if path_entries(path_env).iter().any(|entry| entry == &home_bin) {
+        return home_bin.join(bundled_sidecar_binary_filename());
+    }
+
+    let local_bin = home_dir.join(".local").join("bin");
+    if path_entries(path_env).iter().any(|entry| entry == &local_bin) {
+        return local_bin.join(bundled_sidecar_binary_filename());
+    }
+
+    if cfg!(target_os = "macos") {
+        return home_bin.join(bundled_sidecar_binary_filename());
+    }
+
+    local_bin.join(bundled_sidecar_binary_filename())
+}
+
+fn install_dir_on_path(path_env: Option<&str>, install_path: &Path) -> bool {
+    let Some(parent) = install_path.parent() else {
+        return false;
+    };
+    path_entries(path_env).iter().any(|entry| entry == parent)
+}
+
+fn cli_install_matches(install_path: &Path, bundled_path: &Path) -> bool {
+    if !(install_path.exists() && bundled_path.exists()) {
+        return false;
+    }
+    canonicalize_path(install_path) == canonicalize_path(bundled_path)
+}
+
+fn build_cli_install_status(
+    bundled_path: &Path,
+    install_path: &Path,
+    path_env: Option<&str>,
+    shell_env: Option<&str>,
+    home_dir: &Path,
+) -> CliInstallStatus {
+    let shell_profile = shell_profile_path(shell_env, home_dir);
+    let install_dir = install_path.parent().unwrap_or_else(|| Path::new("."));
+    let shell_export = if shell_env.unwrap_or_default().contains("fish") {
+        format!("fish_add_path {}", display_home_relative(install_dir, home_dir))
+    } else {
+        format!("export PATH=\"{}:$PATH\"", display_home_relative(install_dir, home_dir))
+    };
+    CliInstallStatus {
+        bundled_path: bundled_path.to_string_lossy().into_owned(),
+        install_path: install_path.to_string_lossy().into_owned(),
+        installed: cli_install_matches(install_path, bundled_path),
+        install_dir_on_path: install_dir_on_path(path_env, install_path),
+        shell_export: shell_export.clone(),
+        shell_profile: shell_profile.to_string_lossy().into_owned(),
+        persist_command: if shell_env.unwrap_or_default().contains("fish") {
+            shell_export
+        } else {
+            format!(
+                "echo '{}' >> {}",
+                shell_export,
+                display_home_relative(&shell_profile, home_dir)
+            )
+        },
+    }
+}
+
+#[cfg(unix)]
+fn link_projectctl(bundled_path: &Path, install_path: &Path) -> Result<(), String> {
+    std::os::unix::fs::symlink(bundled_path, install_path).map_err(|error| error.to_string())
+}
+
+#[cfg(windows)]
+fn link_projectctl(bundled_path: &Path, install_path: &Path) -> Result<(), String> {
+    fs::copy(bundled_path, install_path)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+fn install_projectctl_entry(bundled_path: &Path, install_path: &Path) -> Result<(), String> {
+    if !bundled_path.exists() {
+        return Err(format!("Bundled CLI not found: {}", bundled_path.display()));
+    }
+
+    if cli_install_matches(install_path, bundled_path) {
+        return Ok(());
+    }
+
+    if let Some(parent) = install_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+
+    if let Ok(metadata) = fs::symlink_metadata(install_path) {
+        if metadata.file_type().is_dir() {
+            return Err(format!("CLI install path is a directory: {}", install_path.display()));
+        }
+        if metadata.file_type().is_symlink() {
+            fs::remove_file(install_path).map_err(|error| error.to_string())?;
+        } else {
+            return Err(format!(
+                "CLI install path already exists and will not be replaced automatically: {}",
+                install_path.display()
+            ));
+        }
+    }
+
+    link_projectctl(bundled_path, install_path)
 }
 
 fn resolve_input_path(raw: &str) -> Result<PathBuf, String> {
@@ -643,6 +797,19 @@ fn spawn_bridge_restart(app: AppHandle, reason: &'static str) {
 fn current_projectctl_path() -> Result<PathBuf, String> {
     let executable = env::current_exe().map_err(|error| error.to_string())?;
     Ok(resolve_bundled_projectctl_path(&executable))
+}
+
+fn cli_install_status() -> Result<CliInstallStatus, String> {
+    let home_dir = user_home_dir()?;
+    let bundled_path = current_projectctl_path()?;
+    let install_path = resolve_cli_install_path(env::var("PATH").ok().as_deref(), &home_dir);
+    Ok(build_cli_install_status(
+        &bundled_path,
+        &install_path,
+        env::var("PATH").ok().as_deref(),
+        env::var("SHELL").ok().as_deref(),
+        &home_dir,
+    ))
 }
 
 fn sync_tray(app: &AppHandle, state: &AppState, payload: &LoadStatePayload) -> Result<(), String> {
@@ -1154,6 +1321,21 @@ fn get_bridge_client_snippets(
     to_json_string(&snippets)
 }
 
+#[tauri::command]
+fn get_cli_install_status() -> Result<String, String> {
+    to_json_string(&cli_install_status()?)
+}
+
+#[tauri::command]
+fn install_cli_cmd() -> Result<String, String> {
+    let status = cli_install_status()?;
+    install_projectctl_entry(
+        Path::new(&status.bundled_path),
+        Path::new(&status.install_path),
+    )?;
+    to_json_string(&cli_install_status()?)
+}
+
 fn build_tray(app: &AppHandle, state: &AppState) -> Result<(), String> {
     let project_item = MenuItem::with_id(app, "project", "Project: none", false, None::<&str>)
         .map_err(|error| error.to_string())?;
@@ -1283,6 +1465,8 @@ fn main() {
             get_bridge_status,
             regenerate_bridge_token,
             get_bridge_client_snippets,
+            get_cli_install_status,
+            install_cli_cmd,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -1482,6 +1666,49 @@ mod tests {
         assert!(path_is_root_or_descendant("/tmp/workspace/root", root));
         assert!(path_is_root_or_descendant("/tmp/workspace/root/nested/project", root));
         assert!(!path_is_root_or_descendant("/tmp/workspace/root-sibling", root));
+    }
+
+    #[test]
+    fn cli_install_path_prefers_visible_home_bin_on_macos() {
+        let home = PathBuf::from("/tmp/test-home");
+        let install = resolve_cli_install_path(Some("/usr/bin:/tmp/test-home/bin"), &home);
+        assert_eq!(install, home.join("bin").join(bundled_sidecar_binary_filename()));
+    }
+
+    #[test]
+    fn cli_install_status_reports_path_export_command() {
+        let home = PathBuf::from("/tmp/test-home");
+        let bundled = home.join("parallel.app").join("Contents").join("MacOS").join("projectctl");
+        let install = home.join("bin").join("projectctl");
+        let status = build_cli_install_status(
+            &bundled,
+            &install,
+            Some("/usr/bin"),
+            Some("/bin/zsh"),
+            &home,
+        );
+
+        assert!(!status.install_dir_on_path);
+        assert_eq!(status.shell_export, "export PATH=\"$HOME/bin:$PATH\"");
+        assert_eq!(status.shell_profile, "/tmp/test-home/.zshrc");
+        assert_eq!(
+            status.persist_command,
+            "echo 'export PATH=\"$HOME/bin:$PATH\"' >> $HOME/.zshrc"
+        );
+    }
+
+    #[test]
+    fn install_projectctl_entry_creates_cli_link() {
+        let base = unique_temp_dir("cli-install");
+        let bundled = base.join("parallel.app").join("Contents").join("MacOS").join("projectctl");
+        fs::create_dir_all(bundled.parent().expect("bundled parent")).expect("bundled dir should create");
+        fs::write(&bundled, "cli").expect("bundled binary should write");
+
+        let install = base.join("bin").join("projectctl");
+        install_projectctl_entry(&bundled, &install).expect("cli install should succeed");
+
+        assert!(install.exists());
+        assert!(cli_install_matches(&install, &bundled));
     }
 
     #[test]

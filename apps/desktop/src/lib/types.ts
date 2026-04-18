@@ -36,6 +36,16 @@ export interface BridgeStateEvent {
   mcpRuntime: BridgeRuntime;
 }
 
+export interface CliInstallStatus {
+  bundledPath: string;
+  installPath: string;
+  installed: boolean;
+  installDirOnPath: boolean;
+  shellExport: string;
+  shellProfile: string;
+  persistCommand: string;
+}
+
 export interface ProjectSummary {
   id: string | null;
   name: string;

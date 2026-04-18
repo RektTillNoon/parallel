@@ -1,6 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 
-import type { BridgeSnippet, LoadStatePayload, ProjectDetail } from './types';
+import type { BridgeSnippet, CliInstallStatus, LoadStatePayload, ProjectDetail } from './types';
 
 function ensureTauriRuntime(command: string) {
   if (!isTauri()) {
@@ -98,4 +98,12 @@ export async function regenerateBridgeToken() {
 
 export async function getBridgeClientSnippets(kind: string) {
   return invokeJson<BridgeSnippet[]>('get_bridge_client_snippets', { args: { kind } });
+}
+
+export async function getCliInstallStatus() {
+  return invokeJson<CliInstallStatus>('get_cli_install_status');
+}
+
+export async function installCli() {
+  return invokeJson<CliInstallStatus>('install_cli_cmd');
 }
