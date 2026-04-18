@@ -31,9 +31,7 @@ pub fn build_accepted_decision_markdown(entries: &[AcceptedDecision]) -> String 
 }
 
 pub fn parse_accepted_decisions(markdown: &str) -> Vec<AcceptedDecision> {
-    let normalized = markdown
-        .trim_start_matches("# Accepted Decisions")
-        .trim();
+    let normalized = markdown.trim_start_matches("# Accepted Decisions").trim();
     if normalized.is_empty() {
         return Vec::new();
     }

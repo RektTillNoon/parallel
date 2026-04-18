@@ -11,7 +11,9 @@ pub struct IndexStore {
 
 impl IndexStore {
     pub fn new(db_path: impl Into<String>) -> Result<Self> {
-        let store = Self { db_path: db_path.into() };
+        let store = Self {
+            db_path: db_path.into(),
+        };
         store.ensure_schema()?;
         Ok(store)
     }
@@ -130,9 +132,14 @@ impl IndexStore {
         Ok(())
     }
 
-    pub fn mark_missing_projects(&self, watched_roots: &[String], present_roots: &[String]) -> Result<()> {
+    pub fn mark_missing_projects(
+        &self,
+        watched_roots: &[String],
+        present_roots: &[String],
+    ) -> Result<()> {
         let candidates = self.list_projects(watched_roots)?;
-        let present: std::collections::HashSet<&str> = present_roots.iter().map(|value| value.as_str()).collect();
+        let present: std::collections::HashSet<&str> =
+            present_roots.iter().map(|value| value.as_str()).collect();
         let conn = self.connection()?;
         for candidate in candidates {
             if !present.contains(candidate.summary.root.as_str()) {
@@ -192,7 +199,8 @@ impl IndexStore {
 
     pub fn list_watched_roots(&self) -> Result<Vec<String>> {
         let conn = self.connection()?;
-        let mut stmt = conn.prepare("SELECT root FROM watched_roots ORDER BY root COLLATE NOCASE")?;
+        let mut stmt =
+            conn.prepare("SELECT root FROM watched_roots ORDER BY root COLLATE NOCASE")?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         let mut roots = Vec::new();
         for row in rows {

@@ -110,17 +110,28 @@ pub fn target_triple() -> &'static str {
 }
 
 pub fn sidecar_binary_filename() -> String {
-    let extension = if cfg!(target_os = "windows") { ".exe" } else { "" };
+    let extension = if cfg!(target_os = "windows") {
+        ".exe"
+    } else {
+        ""
+    };
     format!("projectctl-{}{}", target_triple(), extension)
 }
 
 pub fn bundled_sidecar_binary_filename() -> String {
-    let extension = if cfg!(target_os = "windows") { ".exe" } else { "" };
+    let extension = if cfg!(target_os = "windows") {
+        ".exe"
+    } else {
+        ""
+    };
     format!("projectctl{extension}")
 }
 
 pub fn resolve_bundled_projectctl_path(current_exe: &Path) -> PathBuf {
-    resolve_bundled_projectctl_path_with_manifest_dir(current_exe, Path::new(env!("CARGO_MANIFEST_DIR")))
+    resolve_bundled_projectctl_path_with_manifest_dir(
+        current_exe,
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+    )
 }
 
 fn resolve_bundled_projectctl_path_with_manifest_dir(
@@ -141,9 +152,7 @@ fn resolve_bundled_projectctl_path_with_manifest_dir(
         return target_suffixed_sibling;
     }
 
-    let dev_binary = manifest_dir
-        .join("binaries")
-        .join(&binary_name);
+    let dev_binary = manifest_dir.join("binaries").join(&binary_name);
     if dev_binary.exists() {
         return dev_binary;
     }
@@ -152,7 +161,11 @@ fn resolve_bundled_projectctl_path_with_manifest_dir(
 }
 
 pub fn mark_clients_stale(snapshot: &mut BridgeRuntimeSnapshot, reason: &str) {
-    if !snapshot.stale_reasons.iter().any(|candidate| candidate == reason) {
+    if !snapshot
+        .stale_reasons
+        .iter()
+        .any(|candidate| candidate == reason)
+    {
         snapshot.stale_reasons.push(reason.to_string());
     }
     let mut clients = BTreeSet::from_iter(snapshot.stale_clients.iter().cloned());
@@ -172,7 +185,10 @@ pub fn clear_client_stale(snapshot: &mut BridgeRuntimeSnapshot, kind: &str) {
 }
 
 pub fn is_client_stale(snapshot: &BridgeRuntimeSnapshot, kind: &str) -> bool {
-    snapshot.stale_clients.iter().any(|candidate| candidate == kind)
+    snapshot
+        .stale_clients
+        .iter()
+        .any(|candidate| candidate == kind)
 }
 
 pub fn build_client_snippet(
@@ -234,7 +250,10 @@ pub fn build_client_snippet(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs, time::{SystemTime, UNIX_EPOCH}};
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     fn unique_test_dir(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -253,7 +272,9 @@ mod tests {
         mark_clients_stale(&mut snapshot, "endpointChanged");
         assert!(snapshot.setup_stale);
         assert_eq!(snapshot.stale_clients.len(), 3);
-        assert!(snapshot.stale_reasons.contains(&"endpointChanged".to_string()));
+        assert!(snapshot
+            .stale_reasons
+            .contains(&"endpointChanged".to_string()));
     }
 
     #[test]
@@ -279,7 +300,10 @@ mod tests {
         let packaged_sidecar = contents_dir.join(bundled_sidecar_binary_filename());
         fs::write(&packaged_sidecar, "").expect("create packaged sidecar");
 
-        let resolved = resolve_bundled_projectctl_path_with_manifest_dir(&current_exe, &root.join("src-tauri"));
+        let resolved = resolve_bundled_projectctl_path_with_manifest_dir(
+            &current_exe,
+            &root.join("src-tauri"),
+        );
         assert_eq!(resolved, packaged_sidecar);
 
         fs::remove_dir_all(&root).expect("remove temp test dir");
@@ -300,7 +324,8 @@ mod tests {
         let dev_binary = binaries_dir.join(sidecar_binary_filename());
         fs::write(&dev_binary, "").expect("create dev sidecar");
 
-        let resolved = resolve_bundled_projectctl_path_with_manifest_dir(&current_exe, &manifest_dir);
+        let resolved =
+            resolve_bundled_projectctl_path_with_manifest_dir(&current_exe, &manifest_dir);
         assert_eq!(resolved, dev_binary);
 
         fs::remove_dir_all(&root).expect("remove temp test dir");

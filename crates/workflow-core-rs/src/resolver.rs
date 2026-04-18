@@ -1,7 +1,4 @@
-use std::{
-    fs,
-    path::Path,
-};
+use std::{fs, path::Path};
 
 use anyhow::{anyhow, Result};
 use serde::Deserialize;
@@ -29,7 +26,11 @@ pub fn resolve_index_db_path(explicit: Option<&str>, env_value: Option<&str>) ->
     explicit
         .filter(|value| !value.trim().is_empty())
         .map(str::to_string)
-        .or_else(|| env_value.filter(|value| !value.trim().is_empty()).map(str::to_string))
+        .or_else(|| {
+            env_value
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_string)
+        })
         .or_else(|| canonical_index_db_path().map(|path| path.to_string_lossy().into_owned()))
         .ok_or_else(|| anyhow!("Unable to resolve canonical workflow index DB path"))
 }
@@ -87,7 +88,10 @@ pub(crate) fn resolve_watched_roots_from_sources(
     Ok(Vec::new())
 }
 
-pub fn migrate_legacy_watched_roots(index_db_path: &str, legacy_settings_path: Option<&Path>) -> Result<Vec<String>> {
+pub fn migrate_legacy_watched_roots(
+    index_db_path: &str,
+    legacy_settings_path: Option<&Path>,
+) -> Result<Vec<String>> {
     let store = IndexStore::new(index_db_path.to_string())?;
     if !store.list_watched_roots()?.is_empty() {
         return store.list_watched_roots();
@@ -158,8 +162,12 @@ mod tests {
         fs::create_dir_all(temp.path().join("scan-root"))?;
 
         let store = IndexStore::new(index_db.display().to_string())?;
-        store.sync_project_root_seed(temp.path().join("existing").display().to_string().as_str())?;
-        store.record_watched_root_scan(temp.path().join("scan-root").display().to_string().as_str(), "2026-01-01T00:00:00Z")?;
+        store
+            .sync_project_root_seed(temp.path().join("existing").display().to_string().as_str())?;
+        store.record_watched_root_scan(
+            temp.path().join("scan-root").display().to_string().as_str(),
+            "2026-01-01T00:00:00Z",
+        )?;
 
         let roots = resolve_watched_roots_from_sources(
             RootResolutionSurface::Bridge,
@@ -296,10 +304,7 @@ mod tests {
         let first_result = rx.recv().expect("first result should arrive");
         let second_result = rx.recv().expect("second result should arrive");
         assert_eq!(first_result, second_result);
-        assert_eq!(
-            first_result,
-            vec![canonical(&first), canonical(&second)]
-        );
+        assert_eq!(first_result, vec![canonical(&first), canonical(&second)]);
         Ok(())
     }
 }

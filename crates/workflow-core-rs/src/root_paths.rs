@@ -30,5 +30,6 @@ where
 pub(crate) fn root_belongs_to_watched_root(root: &str, watched_root: &str) -> bool {
     let root = canonicalize_root(root);
     let watched_root = canonicalize_root(watched_root);
-    root == watched_root || root.starts_with(&format!("{watched_root}{}", std::path::MAIN_SEPARATOR))
+    root == watched_root
+        || root.starts_with(&format!("{watched_root}{}", std::path::MAIN_SEPARATOR))
 }

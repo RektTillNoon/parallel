@@ -35,7 +35,9 @@ fn create_default_plan() -> Plan {
                 id: "capture-requirements".to_string(),
                 title: "Capture requirements".to_string(),
                 summary: "Write the initial problem statement and success criteria.".to_string(),
-                details: vec!["Write the initial problem statement and success criteria.".to_string()],
+                details: vec![
+                    "Write the initial problem statement and success criteria.".to_string()
+                ],
                 depends_on: Vec::new(),
                 subtasks: Vec::new(),
                 status: StepStatus::Todo,
@@ -68,7 +70,10 @@ fn create_default_manifest(root: &str, input: &InitProjectInput, timestamp: &str
 }
 
 fn get_all_steps(plan: &Plan) -> Vec<&Step> {
-    plan.phases.iter().flat_map(|phase| phase.steps.iter()).collect()
+    plan.phases
+        .iter()
+        .flat_map(|phase| phase.steps.iter())
+        .collect()
 }
 
 pub(crate) fn get_plan_progress(plan: &Plan) -> (i64, i64) {
@@ -82,10 +87,15 @@ pub(crate) fn get_plan_progress(plan: &Plan) -> (i64, i64) {
 }
 
 pub fn find_current_step_title(plan: &Plan, current_step_id: Option<&str>) -> Option<String> {
-    current_step_id.and_then(|step_id| locate_step(plan, step_id).map(|(_, _, _, step)| step.title.clone()))
+    current_step_id
+        .and_then(|step_id| locate_step(plan, step_id).map(|(_, _, _, step)| step.title.clone()))
 }
 
-fn create_default_runtime(plan: &Plan, active_branch: Option<String>, timestamp: &str) -> RuntimeState {
+fn create_default_runtime(
+    plan: &Plan,
+    active_branch: Option<String>,
+    timestamp: &str,
+) -> RuntimeState {
     let first_step = get_next_actionable_step(plan);
     RuntimeState {
         version: 2,
@@ -159,8 +169,10 @@ fn append_activity(root: &str, event: &ActivityEvent) -> Result<()> {
 }
 
 fn read_decisions_markdown(root: &str) -> Result<String> {
-    Ok(read_text_if_exists(get_workflow_paths(root).decisions_path)?
-        .unwrap_or_else(|| "# Accepted Decisions\n".to_string()))
+    Ok(
+        read_text_if_exists(get_workflow_paths(root).decisions_path)?
+            .unwrap_or_else(|| "# Accepted Decisions\n".to_string()),
+    )
 }
 
 fn ensure_project_files(root: &str, actor: &MutationActor) -> Result<()> {
@@ -242,7 +254,10 @@ fn human_override_allowed(source: ActivitySource) -> bool {
     matches!(source, ActivitySource::Human | ActivitySource::Desktop)
 }
 
-pub(crate) fn locate_step<'a>(plan: &'a Plan, step_id: &str) -> Option<(usize, usize, &'a Phase, &'a Step)> {
+pub(crate) fn locate_step<'a>(
+    plan: &'a Plan,
+    step_id: &str,
+) -> Option<(usize, usize, &'a Phase, &'a Step)> {
     for (phase_index, phase) in plan.phases.iter().enumerate() {
         for (step_index, step) in phase.steps.iter().enumerate() {
             if step.id == step_id {
@@ -307,8 +322,15 @@ fn normalize_plan_in_progress_states(plan: &mut Plan, active_step_id: Option<&st
 }
 
 fn reconcile_sessions_and_plan(plan: &mut Plan, sessions: &mut SessionsFile) {
-    let step_ids: HashSet<String> = get_all_steps(plan).iter().map(|step| step.id.clone()).collect();
-    let session_ids: HashSet<String> = sessions.sessions.iter().map(|session| session.id.clone()).collect();
+    let step_ids: HashSet<String> = get_all_steps(plan)
+        .iter()
+        .map(|step| step.id.clone())
+        .collect();
+    let session_ids: HashSet<String> = sessions
+        .sessions
+        .iter()
+        .map(|session| session.id.clone())
+        .collect();
 
     for session in &mut sessions.sessions {
         if let Some(owned_step_id) = &session.owned_step_id {
@@ -352,10 +374,12 @@ fn refresh_runtime_state(
         .as_ref()
         .and_then(|(_, _, _, step)| step.owner_session_id.clone())
         .or_else(|| {
-            runtime
-                .focus_session_id
-                .clone()
-                .filter(|session_id| sessions.sessions.iter().any(|session| session.id == *session_id))
+            runtime.focus_session_id.clone().filter(|session_id| {
+                sessions
+                    .sessions
+                    .iter()
+                    .any(|session| session.id == *session_id)
+            })
         });
 
     let status = if !runtime.blockers.is_empty() {
@@ -419,7 +443,9 @@ fn build_initialized_project_summary(root: &str) -> Result<ProjectSummary> {
         owner: Some(manifest.owner),
         tags: manifest.tags,
         initialized: true,
-        status: format!("{:?}", runtime.status).to_lowercase().replace("stepstatus::", ""),
+        status: format!("{:?}", runtime.status)
+            .to_lowercase()
+            .replace("stepstatus::", ""),
         stale: determine_project_stale(Some(&runtime), repo_exists),
         missing: !repo_exists,
         current_step_id: runtime.current_step_id.clone(),
@@ -482,7 +508,11 @@ fn build_project_summary(root: &str) -> Result<ProjectSummary> {
     }
 }
 
-fn resolve_project_watched_root(store: &IndexStore, root: &str, explicit_watched_root: Option<&str>) -> Result<String> {
+fn resolve_project_watched_root(
+    store: &IndexStore,
+    root: &str,
+    explicit_watched_root: Option<&str>,
+) -> Result<String> {
     if let Some(watched_root) = explicit_watched_root.filter(|value| !value.trim().is_empty()) {
         return Ok(canonicalize_root(watched_root));
     }
@@ -501,7 +531,11 @@ fn resolve_project_watched_root(store: &IndexStore, root: &str, explicit_watched
     Ok(candidates.pop().unwrap_or(root))
 }
 
-pub fn refresh_project_index(root: &str, index_db_path: &str, watched_root: Option<&str>) -> Result<()> {
+pub fn refresh_project_index(
+    root: &str,
+    index_db_path: &str,
+    watched_root: Option<&str>,
+) -> Result<()> {
     let root = canonicalize_root(root);
     let summary = build_project_summary(&root)?;
     let store = IndexStore::new(index_db_path.to_string())?;
@@ -561,7 +595,8 @@ fn create_session_record(
         .unwrap_or_else(|| format!("{} session", actor.actor));
     let slug = slugify(&session_title);
     WorkflowSession {
-        id: preferred_id.unwrap_or_else(|| format!("{}-{}", slug, &Uuid::new_v4().to_string()[..8])),
+        id: preferred_id
+            .unwrap_or_else(|| format!("{}-{}", slug, &Uuid::new_v4().to_string()[..8])),
         title: session_title,
         actor: actor.actor.clone(),
         source: actor.source,
@@ -582,7 +617,11 @@ fn ensure_session_record(
     now: &str,
 ) -> WorkflowSession {
     if let Some(session_id) = &context.session_id {
-        if let Some(existing) = sessions.sessions.iter_mut().find(|session| session.id == *session_id) {
+        if let Some(existing) = sessions
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == *session_id)
+        {
             if let Some(title) = &context.session_title {
                 if !title.trim().is_empty() {
                     existing.title = title.trim().to_string();
@@ -594,7 +633,13 @@ fn ensure_session_record(
             return existing.clone();
         }
 
-        let created = create_session_record(actor, branch, context.session_title.clone(), now, Some(session_id.clone()));
+        let created = create_session_record(
+            actor,
+            branch,
+            context.session_title.clone(),
+            now,
+            Some(session_id.clone()),
+        );
         sessions.sessions.push(created.clone());
         return created;
     }
@@ -602,7 +647,11 @@ fn ensure_session_record(
     let matches = matching_active_sessions(sessions, &actor.actor, actor.source, branch.as_deref());
     if matches.len() == 1 {
         let existing_id = matches[0].id.clone();
-        if let Some(existing) = sessions.sessions.iter_mut().find(|session| session.id == existing_id) {
+        if let Some(existing) = sessions
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == existing_id)
+        {
             if let Some(title) = &context.session_title {
                 if !title.trim().is_empty() {
                     existing.title = title.trim().to_string();
@@ -650,22 +699,39 @@ fn unique_id(base: &str, used: &mut HashSet<String>) -> String {
 
 fn subtask_id_from_title(title: &str) -> String {
     let slug = slugify(title);
-    if slug.is_empty() { "subtask".to_string() } else { slug }
+    if slug.is_empty() {
+        "subtask".to_string()
+    } else {
+        slug
+    }
 }
 
 fn step_id_from_title(title: &str) -> String {
     let slug = slugify(title);
-    if slug.is_empty() { "step".to_string() } else { slug }
+    if slug.is_empty() {
+        "step".to_string()
+    } else {
+        slug
+    }
 }
 
 fn phase_id_from_title(title: &str) -> String {
     let slug = slugify(title);
-    if slug.is_empty() { "phase".to_string() } else { slug }
+    if slug.is_empty() {
+        "phase".to_string()
+    } else {
+        slug
+    }
 }
 
 fn ensure_observed_step(session: &mut WorkflowSession, step_id: Option<&str>) {
     let Some(step_id) = step_id else { return };
-    if session.owned_step_id.as_deref() == Some(step_id) || session.observed_step_ids.iter().any(|value| value == step_id) {
+    if session.owned_step_id.as_deref() == Some(step_id)
+        || session
+            .observed_step_ids
+            .iter()
+            .any(|value| value == step_id)
+    {
         return;
     }
     session.observed_step_ids.push(step_id.to_string());
@@ -673,8 +739,10 @@ fn ensure_observed_step(session: &mut WorkflowSession, step_id: Option<&str>) {
 
 fn build_synced_plan(previous_plan: &Plan, phases: &[PlanSyncPhaseInput]) -> Result<Plan> {
     let previous_steps = get_all_steps(previous_plan);
-    let previous_by_id: HashMap<String, &Step> =
-        previous_steps.iter().map(|step| (step.id.clone(), *step)).collect();
+    let previous_by_id: HashMap<String, &Step> = previous_steps
+        .iter()
+        .map(|step| (step.id.clone(), *step))
+        .collect();
     let previous_by_title: HashMap<String, &Step> = previous_steps
         .iter()
         .map(|step| (step.title.trim().to_lowercase(), *step))
@@ -704,7 +772,11 @@ fn build_synced_plan(previous_plan: &Plan, phases: &[PlanSyncPhaseInput]) -> Res
                         .as_ref()
                         .and_then(|id| previous_by_id.get(id))
                         .copied()
-                        .or_else(|| previous_by_title.get(&step_input.title.trim().to_lowercase()).copied())
+                        .or_else(|| {
+                            previous_by_title
+                                .get(&step_input.title.trim().to_lowercase())
+                                .copied()
+                        })
                         .or_else(|| find_step_by_title(previous_plan, &step_input.title));
 
                     let step_id = unique_id(
@@ -713,7 +785,9 @@ fn build_synced_plan(previous_plan: &Plan, phases: &[PlanSyncPhaseInput]) -> Res
                             .as_deref()
                             .map(str::trim)
                             .filter(|value| !value.is_empty())
-                            .unwrap_or_else(|| previous.map(|step| step.id.as_str()).unwrap_or_else(|| "")),
+                            .unwrap_or_else(|| {
+                                previous.map(|step| step.id.as_str()).unwrap_or_else(|| "")
+                            }),
                         &mut used_step_ids,
                     );
                     let step_id = if step_id.is_empty() {
@@ -722,7 +796,12 @@ fn build_synced_plan(previous_plan: &Plan, phases: &[PlanSyncPhaseInput]) -> Res
                         step_id
                     };
                     let previous_subtasks: HashMap<String, &Subtask> = previous
-                        .map(|step| step.subtasks.iter().map(|subtask| (subtask.id.clone(), subtask)).collect())
+                        .map(|step| {
+                            step.subtasks
+                                .iter()
+                                .map(|subtask| (subtask.id.clone(), subtask))
+                                .collect()
+                        })
                         .unwrap_or_default();
                     let previous_subtasks_by_title: HashMap<String, &Subtask> = previous
                         .map(|step| {
@@ -806,7 +885,10 @@ fn build_synced_plan(previous_plan: &Plan, phases: &[PlanSyncPhaseInput]) -> Res
         })
         .collect::<Vec<_>>();
 
-    let next_plan = Plan { version: 2, phases: next_phases };
+    let next_plan = Plan {
+        version: 2,
+        phases: next_phases,
+    };
     validate_plan(&next_plan)?;
     Ok(next_plan)
 }
@@ -835,7 +917,12 @@ struct MutateProjectResult {
     event_context: EventContext,
 }
 
-fn mutate_project<F>(root: &str, actor: &MutationActor, index_db_path: &str, mutate: F) -> Result<ProjectDetail>
+fn mutate_project<F>(
+    root: &str,
+    actor: &MutationActor,
+    index_db_path: &str,
+    mutate: F,
+) -> Result<ProjectDetail>
 where
     F: FnOnce(MutateProjectState) -> Result<MutateProjectResult>,
 {
@@ -1009,7 +1096,13 @@ pub fn ensure_session(input: EnsureSessionInput) -> Result<ProjectDetail> {
             .branch
             .clone()
             .or_else(|| read_git_branch(&input.root).ok().flatten());
-        let session = ensure_session_record(&mut data.sessions, &actor, branch.clone(), &session_context, &now);
+        let session = ensure_session_record(
+            &mut data.sessions,
+            &actor,
+            branch.clone(),
+            &session_context,
+            &now,
+        );
         let next_runtime = refresh_runtime_state(
             &mut data.plan,
             &RuntimeState {
@@ -1055,7 +1148,13 @@ pub fn sync_plan(input: SyncPlanInput) -> Result<ProjectDetail> {
             .clone()
             .or_else(|| read_git_branch(&input.root).ok().flatten());
         let next_plan = build_synced_plan(&data.plan, &input.phases)?;
-        let session = ensure_session_record(&mut data.sessions, &actor, branch.clone(), &session_context, &now);
+        let session = ensure_session_record(
+            &mut data.sessions,
+            &actor,
+            branch.clone(),
+            &session_context,
+            &now,
+        );
         let mut next_plan = next_plan;
         reconcile_sessions_and_plan(&mut next_plan, &mut data.sessions);
         let next_runtime = refresh_runtime_state(
@@ -1094,7 +1193,8 @@ pub fn start_step(
     index_db_path: &str,
 ) -> Result<ProjectDetail> {
     mutate_project(root, &actor, index_db_path, |mut data| {
-        let Some((phase_index, _step_index, _, current_step)) = locate_step(&data.plan, step_id) else {
+        let Some((phase_index, _step_index, _, current_step)) = locate_step(&data.plan, step_id)
+        else {
             bail!("Unknown step \"{step_id}\"");
         };
 
@@ -1112,11 +1212,15 @@ pub fn start_step(
             .branch
             .clone()
             .or_else(|| read_git_branch(root).ok().flatten());
-        let session = ensure_session_record(&mut data.sessions, &actor, branch.clone(), &context, &now);
+        let session =
+            ensure_session_record(&mut data.sessions, &actor, branch.clone(), &context, &now);
 
         if let Some(owner_session_id) = current_step.owner_session_id.as_deref() {
             if owner_session_id != session.id {
-                bail!("Step \"{}\" is owned by another session", current_step.title);
+                bail!(
+                    "Step \"{}\" is owned by another session",
+                    current_step.title
+                );
             }
         }
 
@@ -1134,7 +1238,12 @@ pub fn start_step(
             step.completed_at = None;
             step.completed_by = None;
         }
-        if let Some(session_mut) = data.sessions.sessions.iter_mut().find(|candidate| candidate.id == session.id) {
+        if let Some(session_mut) = data
+            .sessions
+            .sessions
+            .iter_mut()
+            .find(|candidate| candidate.id == session.id)
+        {
             session_mut.owned_step_id = Some(step_id.to_string());
             session_mut.last_updated_at = now.clone();
         }
@@ -1157,7 +1266,10 @@ pub fn start_step(
         );
 
         Ok(MutateProjectResult {
-            summary: format!("Started step \"{}\"", locate_step(&data.plan, step_id).unwrap().3.title),
+            summary: format!(
+                "Started step \"{}\"",
+                locate_step(&data.plan, step_id).unwrap().3.title
+            ),
             event_type: "step.started".to_string(),
             payload: json!({ "stepId": step_id, "sessionId": session.id }),
             write_plan: Some(data.plan),
@@ -1190,9 +1302,15 @@ pub fn complete_step(
             .branch
             .clone()
             .or_else(|| read_git_branch(root).ok().flatten());
-        let session = ensure_session_record(&mut data.sessions, &actor, branch.clone(), &context, &now);
+        let session =
+            ensure_session_record(&mut data.sessions, &actor, branch.clone(), &context, &now);
 
-        if let Some(owner_session_id) = locate_step(&data.plan, step_id).unwrap().3.owner_session_id.clone() {
+        if let Some(owner_session_id) = locate_step(&data.plan, step_id)
+            .unwrap()
+            .3
+            .owner_session_id
+            .clone()
+        {
             if owner_session_id != session.id && !human_override_allowed(actor.source) {
                 bail!("Step \"{}\" is owned by another session", current_title);
             }
@@ -1206,7 +1324,12 @@ pub fn complete_step(
             step.completed_at = Some(now.clone());
             step.completed_by = Some(actor.actor.clone());
         }
-        if let Some(owner_session) = data.sessions.sessions.iter_mut().find(|candidate| candidate.id == session.id) {
+        if let Some(owner_session) = data
+            .sessions
+            .sessions
+            .iter_mut()
+            .find(|candidate| candidate.id == session.id)
+        {
             owner_session.owned_step_id = None;
             owner_session.last_updated_at = now.clone();
         }
@@ -1253,7 +1376,8 @@ pub fn add_blocker(
             .branch
             .clone()
             .or_else(|| read_git_branch(root).ok().flatten());
-        let session = ensure_session_record(&mut data.sessions, &actor, branch.clone(), &context, &now);
+        let session =
+            ensure_session_record(&mut data.sessions, &actor, branch.clone(), &context, &now);
         let mut blockers = data.runtime.blockers.clone();
         if !blockers.iter().any(|candidate| candidate == blocker) {
             blockers.push(blocker.to_string());
@@ -1310,7 +1434,8 @@ pub fn clear_blocker(
             .branch
             .clone()
             .or_else(|| read_git_branch(root).ok().flatten());
-        let session = ensure_session_record(&mut data.sessions, &actor, branch.clone(), &context, &now);
+        let session =
+            ensure_session_record(&mut data.sessions, &actor, branch.clone(), &context, &now);
         let blockers = if let Some(blocker) = blocker.filter(|value| !value.is_empty()) {
             data.runtime
                 .blockers
@@ -1433,7 +1558,10 @@ pub fn update_runtime(input: RuntimePatchInput) -> Result<ProjectDetail> {
         );
         Ok(MutateProjectResult {
             summary: input.summary.clone(),
-            event_type: input.event_type.clone().unwrap_or_else(|| "runtime.updated".to_string()),
+            event_type: input
+                .event_type
+                .clone()
+                .unwrap_or_else(|| "runtime.updated".to_string()),
             payload: Value::Object(input.patch.clone()),
             write_plan: None,
             write_runtime: Some(next_runtime.clone()),
@@ -1448,10 +1576,7 @@ pub fn update_runtime(input: RuntimePatchInput) -> Result<ProjectDetail> {
     })
 }
 
-pub fn append_activity_event(
-    root: &str,
-    event: AppendActivityInput,
-) -> Result<ProjectDetail> {
+pub fn append_activity_event(root: &str, event: AppendActivityInput) -> Result<ProjectDetail> {
     let actor = MutationActor {
         actor: event.actor.clone(),
         source: event.source,
@@ -1463,7 +1588,8 @@ pub fn append_activity_event(
         } else {
             read_git_branch(root).ok().flatten()
         };
-        let should_ensure_session = event.source != ActivitySource::System || event.session_id.is_some();
+        let should_ensure_session =
+            event.source != ActivitySource::System || event.session_id.is_some();
         let session = if should_ensure_session {
             Some(ensure_session_record(
                 &mut data.sessions,
@@ -1481,7 +1607,12 @@ pub fn append_activity_event(
         };
 
         if let (Some(session), Some(step_id)) = (&session, event.step_id.as_deref()) {
-            if let Some(session_mut) = data.sessions.sessions.iter_mut().find(|candidate| candidate.id == session.id) {
+            if let Some(session_mut) = data
+                .sessions
+                .sessions
+                .iter_mut()
+                .find(|candidate| candidate.id == session.id)
+            {
                 ensure_observed_step(session_mut, Some(step_id));
                 session_mut.last_updated_at = now.clone();
             }
@@ -1490,7 +1621,10 @@ pub fn append_activity_event(
         let next_runtime = refresh_runtime_state(
             &mut data.plan,
             &RuntimeState {
-                focus_session_id: session.as_ref().map(|session| session.id.clone()).or_else(|| data.runtime.focus_session_id.clone()),
+                focus_session_id: session
+                    .as_ref()
+                    .map(|session| session.id.clone())
+                    .or_else(|| data.runtime.focus_session_id.clone()),
                 last_updated_at: now.clone(),
                 ..data.runtime.clone()
             },
@@ -1529,7 +1663,8 @@ pub fn propose_decision(
             .branch
             .clone()
             .or_else(|| read_git_branch(root).ok().flatten());
-        let session = ensure_session_record(&mut data.sessions, &actor, branch.clone(), &context, &now);
+        let session =
+            ensure_session_record(&mut data.sessions, &actor, branch.clone(), &context, &now);
         let next_proposal = DecisionProposal {
             id: Uuid::new_v4().to_string(),
             proposed_at: now.clone(),
@@ -1570,7 +1705,12 @@ pub fn propose_decision(
     })
 }
 
-pub fn accept_decision(root: &str, proposal_id: &str, actor: MutationActor, index_db_path: &str) -> Result<ProjectDetail> {
+pub fn accept_decision(
+    root: &str,
+    proposal_id: &str,
+    actor: MutationActor,
+    index_db_path: &str,
+) -> Result<ProjectDetail> {
     with_project_lock(root, || {
         let manifest = read_manifest(root)?;
         let proposal_file = read_pending_proposals(root)?;
@@ -1629,7 +1769,11 @@ pub fn accept_decision(root: &str, proposal_id: &str, actor: MutationActor, inde
     })
 }
 
-pub fn refresh_handoff(root: &str, _actor: MutationActor, index_db_path: &str) -> Result<ProjectDetail> {
+pub fn refresh_handoff(
+    root: &str,
+    _actor: MutationActor,
+    index_db_path: &str,
+) -> Result<ProjectDetail> {
     with_project_lock(root, || {
         refresh_handoff_file(root, index_db_path)?;
         get_project(root)
@@ -1676,9 +1820,9 @@ fn validate_plan(plan: &Plan) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{get_board_project_detail, list_indexed_projects, list_projects, BoardStepDetail};
     use crate::index_store::IndexStore;
     use crate::PlanSyncStepInput;
+    use crate::{get_board_project_detail, list_indexed_projects, list_projects, BoardStepDetail};
     use std::fs;
     use tempfile::tempdir;
 
@@ -1693,7 +1837,10 @@ mod tests {
     #[test]
     fn initializes_expected_files() -> Result<()> {
         let repo = create_real_repo("parallel-project")?;
-        let index_db = Path::new(&repo).join(".app/index.sqlite").display().to_string();
+        let index_db = Path::new(&repo)
+            .join(".app/index.sqlite")
+            .display()
+            .to_string();
         init_project(InitProjectInput {
             root: repo.clone(),
             actor: "tester".to_string(),
@@ -1712,14 +1859,18 @@ mod tests {
         assert!(workflow_dir.join("local/activity.jsonl").exists());
         assert!(workflow_dir.join("local/decisions-proposed.yaml").exists());
         assert!(workflow_dir.join("local/handoff.md").exists());
-        assert!(fs::read_to_string(Path::new(&repo).join(".gitignore"))?.contains(".project-workflow/local/"));
+        assert!(fs::read_to_string(Path::new(&repo).join(".gitignore"))?
+            .contains(".project-workflow/local/"));
         Ok(())
     }
 
     #[test]
     fn supports_step_and_blocker_flow() -> Result<()> {
         let repo = create_real_repo("parallel-project")?;
-        let index_db = Path::new(&repo).join(".app/index.sqlite").display().to_string();
+        let index_db = Path::new(&repo)
+            .join(".app/index.sqlite")
+            .display()
+            .to_string();
         init_project(InitProjectInput {
             root: repo.clone(),
             actor: "tester".to_string(),
@@ -1733,11 +1884,56 @@ mod tests {
         let detail = get_project(&repo)?;
         let first_step_id = detail.plan.phases[0].steps[0].id.clone();
         let ctx = SessionContextInput::default();
-        start_step(&repo, &first_step_id, MutationActor { actor: "agent-1".to_string(), source: ActivitySource::Agent }, ctx.clone(), &index_db)?;
-        add_blocker(&repo, "Need sign-off", MutationActor { actor: "agent-1".to_string(), source: ActivitySource::Agent }, ctx.clone(), &index_db)?;
-        clear_blocker(&repo, Some("Need sign-off"), MutationActor { actor: "agent-1".to_string(), source: ActivitySource::Agent }, ctx.clone(), &index_db)?;
-        add_note(&repo, "Captured initial requirements", MutationActor { actor: "agent-1".to_string(), source: ActivitySource::Agent }, ctx.clone(), &index_db)?;
-        let completed = complete_step(&repo, &first_step_id, MutationActor { actor: "agent-1".to_string(), source: ActivitySource::Agent }, ctx, &index_db)?;
+        start_step(
+            &repo,
+            &first_step_id,
+            MutationActor {
+                actor: "agent-1".to_string(),
+                source: ActivitySource::Agent,
+            },
+            ctx.clone(),
+            &index_db,
+        )?;
+        add_blocker(
+            &repo,
+            "Need sign-off",
+            MutationActor {
+                actor: "agent-1".to_string(),
+                source: ActivitySource::Agent,
+            },
+            ctx.clone(),
+            &index_db,
+        )?;
+        clear_blocker(
+            &repo,
+            Some("Need sign-off"),
+            MutationActor {
+                actor: "agent-1".to_string(),
+                source: ActivitySource::Agent,
+            },
+            ctx.clone(),
+            &index_db,
+        )?;
+        add_note(
+            &repo,
+            "Captured initial requirements",
+            MutationActor {
+                actor: "agent-1".to_string(),
+                source: ActivitySource::Agent,
+            },
+            ctx.clone(),
+            &index_db,
+        )?;
+        let completed = complete_step(
+            &repo,
+            &first_step_id,
+            MutationActor {
+                actor: "agent-1".to_string(),
+                source: ActivitySource::Agent,
+            },
+            ctx,
+            &index_db,
+        )?;
         assert_eq!(completed.plan.phases[0].steps[0].status, StepStatus::Done);
         Ok(())
     }
@@ -1745,7 +1941,10 @@ mod tests {
     #[test]
     fn preserves_step_ids_on_sync() -> Result<()> {
         let repo = create_real_repo("parallel-project")?;
-        let index_db = Path::new(&repo).join(".app/index.sqlite").display().to_string();
+        let index_db = Path::new(&repo)
+            .join(".app/index.sqlite")
+            .display()
+            .to_string();
         init_project(InitProjectInput {
             root: repo.clone(),
             actor: "tester".to_string(),
@@ -1826,8 +2025,13 @@ mod tests {
         })?;
 
         let roots = vec![watched_root.display().to_string()];
-        let canonical_roots = vec![fs::canonicalize(&watched_root)?.to_string_lossy().into_owned()];
-        assert_eq!(missing_watched_root_coverage(&roots, &index_db)?, canonical_roots);
+        let canonical_roots = vec![fs::canonicalize(&watched_root)?
+            .to_string_lossy()
+            .into_owned()];
+        assert_eq!(
+            missing_watched_root_coverage(&roots, &index_db)?,
+            canonical_roots
+        );
 
         let refreshed = list_projects(&roots, &index_db)?;
         assert_eq!(refreshed.len(), 1);
@@ -1852,7 +2056,10 @@ mod tests {
     #[test]
     fn board_projection_filters_active_sessions_and_trims_recent_activity() -> Result<()> {
         let repo = create_real_repo("parallel-project")?;
-        let index_db = Path::new(&repo).join(".app/index.sqlite").display().to_string();
+        let index_db = Path::new(&repo)
+            .join(".app/index.sqlite")
+            .display()
+            .to_string();
         init_project(InitProjectInput {
             root: repo.clone(),
             actor: "tester".to_string(),
@@ -1926,7 +2133,10 @@ mod tests {
         write_yaml_atomic(paths.sessions_path, &paused)?;
 
         let board = get_board_project_detail(&repo)?;
-        assert_eq!(board.root, fs::canonicalize(&repo)?.to_string_lossy().into_owned());
+        assert_eq!(
+            board.root,
+            fs::canonicalize(&repo)?.to_string_lossy().into_owned()
+        );
         assert_eq!(board.sessions.len(), 1);
         assert_eq!(board.sessions[0].id, "active-session");
         assert_eq!(board.blockers, vec!["Need sign-off"]);
@@ -1991,7 +2201,9 @@ mod tests {
 
         let store = IndexStore::new(index_db)?;
         let canonical_repo = fs::canonicalize(&repo)?.to_string_lossy().into_owned();
-        let canonical_watched_root = fs::canonicalize(&watched_root)?.to_string_lossy().into_owned();
+        let canonical_watched_root = fs::canonicalize(&watched_root)?
+            .to_string_lossy()
+            .into_owned();
         assert_eq!(
             store.project_watched_root(&canonical_repo)?,
             Some(canonical_watched_root)

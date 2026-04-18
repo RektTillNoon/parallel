@@ -4,12 +4,13 @@ use std::{env, path::PathBuf, process};
 
 use anyhow::{anyhow, bail, Result};
 use parallel_workflow_core::{
-    accept_decision, add_blocker, add_note, append_activity_event, clear_blocker, complete_step,
-    canonical_index_db_path, ensure_session, get_project, init_project, list_projects,
+    accept_decision, add_blocker, add_note, append_activity_event, canonical_index_db_path,
+    clear_blocker, complete_step, ensure_session, get_project, init_project, list_projects,
     propose_decision, refresh_handoff, resolve_index_db_path, resolve_watched_roots, start_step,
-    sync_plan, update_runtime, ActivitySource, AppendActivityInput, RootResolutionSurface,
-    DecisionProposalInput, EnsureSessionInput, InitProjectInput, MutationActor, PlanSyncPhaseInput,
-    PlanSyncStepInput, PlanSyncSubtaskInput, RuntimePatchInput, SessionContextInput, SyncPlanInput,
+    sync_plan, update_runtime, ActivitySource, AppendActivityInput, DecisionProposalInput,
+    EnsureSessionInput, InitProjectInput, MutationActor, PlanSyncPhaseInput, PlanSyncStepInput,
+    PlanSyncSubtaskInput, RootResolutionSurface, RuntimePatchInput, SessionContextInput,
+    SyncPlanInput,
 };
 use serde_json::{Map, Value};
 
@@ -47,7 +48,9 @@ fn parse_args(argv: &[String]) -> ParsedArgs {
             continue;
         }
 
-        parsed.flags.insert(trimmed.to_string(), next.unwrap().clone());
+        parsed
+            .flags
+            .insert(trimmed.to_string(), next.unwrap().clone());
         index += 2;
     }
     parsed
@@ -108,7 +111,10 @@ fn resolve_root(parsed: &ParsedArgs) -> String {
     let root = flag(parsed, "root")
         .map(PathBuf::from)
         .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    root.canonicalize().unwrap_or(root).to_string_lossy().into_owned()
+    root.canonicalize()
+        .unwrap_or(root)
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn resolve_index_db(parsed: &ParsedArgs) -> Result<String> {
@@ -146,14 +152,20 @@ fn print_result(value: &impl serde::Serialize) -> Result<()> {
 
 fn ensure_human_authority(parsed: &ParsedArgs) -> Result<()> {
     let source = flag(parsed, "source");
-    if source.as_deref() == Some("human") || env::var("PROJECT_WORKFLOW_ALLOW_HUMAN_ACTIONS").ok().as_deref() == Some("1") {
+    if source.as_deref() == Some("human")
+        || env::var("PROJECT_WORKFLOW_ALLOW_HUMAN_ACTIONS")
+            .ok()
+            .as_deref()
+            == Some("1")
+    {
         return Ok(());
     }
     bail!("decision accept requires explicit human authority via --source human")
 }
 
 fn help_payload() -> JsonValue {
-    let default_index_db = canonical_index_db_path().map(|path| path.to_string_lossy().into_owned());
+    let default_index_db =
+        canonical_index_db_path().map(|path| path.to_string_lossy().into_owned());
     serde_json::json!({
       "commands": [
         "projectctl init [--root PATH] [--name NAME]",
@@ -189,56 +201,93 @@ fn phase_inputs_from_json(value: &Value) -> Result<Vec<PlanSyncPhaseInput>> {
     let phases = if let Some(array) = value.as_array() {
         array.clone()
     } else {
-        value.get("phases")
+        value
+            .get("phases")
             .and_then(Value::as_array)
             .cloned()
-            .ok_or_else(|| anyhow!("--plan must be a JSON array of phases or an object with phases"))?
+            .ok_or_else(|| {
+                anyhow!("--plan must be a JSON array of phases or an object with phases")
+            })?
     };
 
     phases
         .into_iter()
         .map(|phase| {
-            let title = phase.get("title").and_then(Value::as_str).ok_or_else(|| anyhow!("phase title is required"))?;
+            let title = phase
+                .get("title")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("phase title is required"))?;
             let steps = phase
                 .get("steps")
                 .and_then(Value::as_array)
                 .ok_or_else(|| anyhow!("phase steps are required"))?
                 .iter()
                 .map(|step| {
-                    let title = step.get("title").and_then(Value::as_str).ok_or_else(|| anyhow!("step title is required"))?;
-                    let subtasks = step
-                        .get("subtasks")
-                        .and_then(Value::as_array)
-                        .map(|items| {
+                    let title = step
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| anyhow!("step title is required"))?;
+                    let subtasks = step.get("subtasks").and_then(Value::as_array).map(|items| {
+                        items
+                            .iter()
+                            .map(|subtask| PlanSyncSubtaskInput {
+                                id: subtask
+                                    .get("id")
+                                    .and_then(Value::as_str)
+                                    .map(ToString::to_string),
+                                title: subtask
+                                    .get("title")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .to_string(),
+                                status: match subtask.get("status").and_then(Value::as_str) {
+                                    Some("done") => {
+                                        Some(parallel_workflow_core::SubtaskStatus::Done)
+                                    }
+                                    Some("todo") => {
+                                        Some(parallel_workflow_core::SubtaskStatus::Todo)
+                                    }
+                                    _ => None,
+                                },
+                            })
+                            .collect::<Vec<_>>()
+                    });
+                    Ok(PlanSyncStepInput {
+                        id: step
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .map(ToString::to_string),
+                        title: title.to_string(),
+                        summary: step
+                            .get("summary")
+                            .and_then(Value::as_str)
+                            .map(ToString::to_string),
+                        details: step.get("details").and_then(Value::as_array).map(|items| {
                             items
                                 .iter()
-                                .map(|subtask| PlanSyncSubtaskInput {
-                                    id: subtask.get("id").and_then(Value::as_str).map(ToString::to_string),
-                                    title: subtask.get("title").and_then(Value::as_str).unwrap_or_default().to_string(),
-                                    status: match subtask.get("status").and_then(Value::as_str) {
-                                        Some("done") => Some(parallel_workflow_core::SubtaskStatus::Done),
-                                        Some("todo") => Some(parallel_workflow_core::SubtaskStatus::Todo),
-                                        _ => None,
-                                    },
-                                })
-                                .collect::<Vec<_>>()
-                        });
-                    Ok(PlanSyncStepInput {
-                        id: step.get("id").and_then(Value::as_str).map(ToString::to_string),
-                        title: title.to_string(),
-                        summary: step.get("summary").and_then(Value::as_str).map(ToString::to_string),
-                        details: step.get("details").and_then(Value::as_array).map(|items| {
-                            items.iter().filter_map(Value::as_str).map(ToString::to_string).collect()
+                                .filter_map(Value::as_str)
+                                .map(ToString::to_string)
+                                .collect()
                         }),
-                        depends_on: step.get("depends_on").and_then(Value::as_array).map(|items| {
-                            items.iter().filter_map(Value::as_str).map(ToString::to_string).collect()
-                        }),
+                        depends_on: step
+                            .get("depends_on")
+                            .and_then(Value::as_array)
+                            .map(|items| {
+                                items
+                                    .iter()
+                                    .filter_map(Value::as_str)
+                                    .map(ToString::to_string)
+                                    .collect()
+                            }),
                         subtasks,
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
             Ok(PlanSyncPhaseInput {
-                id: phase.get("id").and_then(Value::as_str).map(ToString::to_string),
+                id: phase
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
                 title: title.to_string(),
                 steps,
             })
@@ -305,7 +354,10 @@ fn run() -> Result<()> {
                 let token = required_flag(&parsed, "token")?;
                 mcp::run_proxy_stdio(mcp::ProxyStdioConfig { url, token })
             }
-            _ => bail!("Unknown mcp subcommand \"{}\"", subcommand.unwrap_or_default()),
+            _ => bail!(
+                "Unknown mcp subcommand \"{}\"",
+                subcommand.unwrap_or_default()
+            ),
         },
         Some("init") => {
             let root = resolve_root(&parsed);
@@ -332,7 +384,11 @@ fn run() -> Result<()> {
         }
         Some("step") => {
             let root = resolve_root(&parsed);
-            let step_id = parsed.positionals.get(2).cloned().ok_or_else(|| anyhow!("Missing step id"))?;
+            let step_id = parsed
+                .positionals
+                .get(2)
+                .cloned()
+                .ok_or_else(|| anyhow!("Missing step id"))?;
             let result = if subcommand.as_deref() == Some("start") {
                 start_step(&root, &step_id, actor, session_context, &index_db_path)?
             } else {
@@ -351,7 +407,11 @@ fn run() -> Result<()> {
             } else {
                 clear_blocker(
                     &root,
-                    if summary.trim().is_empty() { None } else { Some(summary.as_str()) },
+                    if summary.trim().is_empty() {
+                        None
+                    } else {
+                        Some(summary.as_str())
+                    },
                     actor,
                     session_context,
                     &index_db_path,
@@ -370,7 +430,10 @@ fn run() -> Result<()> {
         }
         Some("session") => {
             if subcommand.as_deref() != Some("ensure") {
-                bail!("Unknown session subcommand \"{}\"", subcommand.unwrap_or_default());
+                bail!(
+                    "Unknown session subcommand \"{}\"",
+                    subcommand.unwrap_or_default()
+                );
             }
             let root = resolve_root(&parsed);
             let result = ensure_session(EnsureSessionInput {
@@ -386,7 +449,10 @@ fn run() -> Result<()> {
         }
         Some("plan") => {
             if subcommand.as_deref() != Some("sync") {
-                bail!("Unknown plan subcommand \"{}\"", subcommand.unwrap_or_default());
+                bail!(
+                    "Unknown plan subcommand \"{}\"",
+                    subcommand.unwrap_or_default()
+                );
             }
             let plan_arg = required_flag(&parsed, "plan")?;
             let parsed_plan: JsonValue = serde_json::from_str(&plan_arg)?;
@@ -406,7 +472,10 @@ fn run() -> Result<()> {
         }
         Some("activity") => {
             if subcommand.as_deref() != Some("add") {
-                bail!("Unknown activity subcommand \"{}\"", subcommand.unwrap_or_default());
+                bail!(
+                    "Unknown activity subcommand \"{}\"",
+                    subcommand.unwrap_or_default()
+                );
             }
             let root = resolve_root(&parsed);
             let event_type = required_flag(&parsed, "type")?;
@@ -459,11 +528,19 @@ fn run() -> Result<()> {
             }
             if subcommand.as_deref() == Some("accept") {
                 ensure_human_authority(&parsed)?;
-                let proposal_id = parsed.positionals.get(2).cloned().or_else(|| flag(&parsed, "proposal-id")).ok_or_else(|| anyhow!("Missing proposal id"))?;
+                let proposal_id = parsed
+                    .positionals
+                    .get(2)
+                    .cloned()
+                    .or_else(|| flag(&parsed, "proposal-id"))
+                    .ok_or_else(|| anyhow!("Missing proposal id"))?;
                 let result = accept_decision(&root, &proposal_id, actor, &index_db_path)?;
                 return print_result(&result);
             }
-            bail!("Unknown decision subcommand \"{}\"", subcommand.unwrap_or_default());
+            bail!(
+                "Unknown decision subcommand \"{}\"",
+                subcommand.unwrap_or_default()
+            );
         }
         Some("runtime") => {
             let patch_raw = required_flag(&parsed, "patch")?;
@@ -478,7 +555,8 @@ fn run() -> Result<()> {
                 actor: actor.actor,
                 source: actor.source,
                 patch: patch_map,
-                summary: flag(&parsed, "summary").unwrap_or_else(|| "Updated runtime state".to_string()),
+                summary: flag(&parsed, "summary")
+                    .unwrap_or_else(|| "Updated runtime state".to_string()),
                 event_type: flag(&parsed, "event-type"),
                 index_db_path,
             })?;
@@ -498,11 +576,8 @@ mod tests {
     #[test]
     fn resolve_index_db_prefers_flag_then_env_then_canonical_default() {
         assert_eq!(
-            resolve_index_db_path(
-                Some("/tmp/from-flag.sqlite"),
-                Some("/tmp/from-env.sqlite"),
-            )
-            .expect("flag path should resolve"),
+            resolve_index_db_path(Some("/tmp/from-flag.sqlite"), Some("/tmp/from-env.sqlite"),)
+                .expect("flag path should resolve"),
             "/tmp/from-flag.sqlite".to_string()
         );
 
@@ -528,7 +603,10 @@ mod tests {
         assert_eq!(payload["indexDb"]["flag"], "--index-db");
         assert_eq!(payload["indexDb"]["envVar"], "PROJECT_WORKFLOW_INDEX_DB");
         assert_eq!(payload["indexDb"]["precedence"][0], "--index-db");
-        assert!(payload["indexDb"]["defaultPath"].is_string() || payload["indexDb"]["defaultPath"].is_null());
+        assert!(
+            payload["indexDb"]["defaultPath"].is_string()
+                || payload["indexDb"]["defaultPath"].is_null()
+        );
     }
 
     #[test]
@@ -542,8 +620,15 @@ mod tests {
     #[test]
     fn positional_tail_or_flag_prefers_positional_tail() {
         let parsed = ParsedArgs {
-            positionals: vec!["note".to_string(), "add".to_string(), "from".to_string(), "tail".to_string()],
-            flags: [("summary".to_string(), "from flag".to_string())].into_iter().collect(),
+            positionals: vec![
+                "note".to_string(),
+                "add".to_string(),
+                "from".to_string(),
+                "tail".to_string(),
+            ],
+            flags: [("summary".to_string(), "from flag".to_string())]
+                .into_iter()
+                .collect(),
             booleans: Default::default(),
         };
 

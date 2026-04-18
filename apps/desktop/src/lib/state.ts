@@ -1,4 +1,4 @@
-import type { BridgeRuntime, LoadStatePayload, ProjectSummary } from './types';
+import type { BridgeRuntime, CliInstallStatus, LoadStatePayload, ProjectSummary } from './types';
 
 export interface SelectionResolution {
   selectedRoot: string | null;
@@ -9,6 +9,13 @@ export interface BridgeStatusPresentation {
   tone: 'running' | 'starting' | 'error' | 'stopped';
   label: string;
   detail: string;
+}
+
+export interface CliInstallPresentation {
+  tone: 'positive' | 'caution';
+  label: string;
+  detail: string | null;
+  needsShellSetup: boolean;
 }
 
 export function resolveSelectionState(
@@ -76,4 +83,41 @@ export function describeBridgeStatus(
           : 'Turn this on to expose the local MCP bridge.',
       };
   }
+}
+
+export function describeCliInstallStatus(status: CliInstallStatus | null): CliInstallPresentation {
+  if (!status?.installed) {
+    return {
+      tone: 'caution',
+      label: status ? 'Not installed' : 'Checking…',
+      detail: null,
+      needsShellSetup: false,
+    };
+  }
+
+  if (status.installDirOnPath) {
+    return {
+      tone: 'positive',
+      label: 'Ready',
+      detail: null,
+      needsShellSetup: false,
+    };
+  }
+
+  if (status.shellProfileConfigured) {
+    return {
+      tone: 'positive',
+      label: 'Configured, open a new Terminal',
+      detail:
+        'Your shell profile already adds this directory. Open a new Terminal window or source the profile if projectctl is still not found.',
+      needsShellSetup: false,
+    };
+  }
+
+  return {
+    tone: 'caution',
+    label: 'Installed, PATH update needed',
+    detail: `Add the install directory to your shell path. Profile: ${status.shellProfile}`,
+    needsShellSetup: true,
+  };
 }

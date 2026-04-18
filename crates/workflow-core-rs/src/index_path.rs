@@ -1,7 +1,4 @@
-use std::{
-    env,
-    path::PathBuf,
-};
+use std::{env, path::PathBuf};
 
 pub const CANONICAL_INDEX_DB_FILE: &str = "workflow-index.sqlite";
 pub const CANONICAL_SETTINGS_FILE: &str = "settings.json";

@@ -1,4 +1,6 @@
-use crate::models::{ActivityEvent, DecisionProposal, Manifest, Plan, RuntimeState, SessionStatus, WorkflowSession};
+use crate::models::{
+    ActivityEvent, DecisionProposal, Manifest, Plan, RuntimeState, SessionStatus, WorkflowSession,
+};
 use crate::services::find_current_step_title;
 
 pub struct HandoffInput {
@@ -11,8 +13,10 @@ pub struct HandoffInput {
 }
 
 pub fn generate_handoff(input: &HandoffInput) -> String {
-    let current_step = find_current_step_title(&input.plan, input.runtime.current_step_id.as_deref());
-    let recent_activity: Vec<ActivityEvent> = input.activity.iter().rev().take(8).cloned().collect();
+    let current_step =
+        find_current_step_title(&input.plan, input.runtime.current_step_id.as_deref());
+    let recent_activity: Vec<ActivityEvent> =
+        input.activity.iter().rev().take(8).cloned().collect();
     let active_sessions: Vec<WorkflowSession> = input
         .sessions
         .iter()
@@ -25,8 +29,13 @@ pub fn generate_handoff(input: &HandoffInput) -> String {
         String::new(),
         "## Current state".to_string(),
         format!("- Project: {}", input.manifest.name),
-        format!("- Status: {:?}", input.runtime.status).to_lowercase().replace("stepstatus::", "- Status: "),
-        format!("- Current step: {}", current_step.unwrap_or_else(|| "None".to_string())),
+        format!("- Status: {:?}", input.runtime.status)
+            .to_lowercase()
+            .replace("stepstatus::", "- Status: "),
+        format!(
+            "- Current step: {}",
+            current_step.unwrap_or_else(|| "None".to_string())
+        ),
         format!(
             "- Next action: {}",
             if input.runtime.next_action.is_empty() {
@@ -37,7 +46,8 @@ pub fn generate_handoff(input: &HandoffInput) -> String {
         ),
         format!(
             "- Active branch: {}",
-            input.runtime
+            input
+                .runtime
                 .active_branch
                 .clone()
                 .unwrap_or_else(|| "Unknown".to_string())
@@ -56,13 +66,13 @@ pub fn generate_handoff(input: &HandoffInput) -> String {
                 .as_ref()
                 .map(|step_id| format!(" -> {step_id}"))
                 .unwrap_or_default();
-            lines.push(format!(
-                "- {} ({}/{:?}){}",
-                session.title,
-                session.actor,
-                session.source,
-                owner
-            ).replace("ActivitySource::", ""));
+            lines.push(
+                format!(
+                    "- {} ({}/{:?}){}",
+                    session.title, session.actor, session.source, owner
+                )
+                .replace("ActivitySource::", ""),
+            );
         }
     }
 
@@ -84,14 +94,13 @@ pub fn generate_handoff(input: &HandoffInput) -> String {
             } else {
                 format!(" | {}", context.join(" / "))
             };
-            lines.push(format!(
-                "- {}: {} ({}/{:?}{})",
-                event.timestamp,
-                event.summary,
-                event.actor,
-                event.source,
-                suffix
-            ).replace("ActivitySource::", ""));
+            lines.push(
+                format!(
+                    "- {}: {} ({}/{:?}{})",
+                    event.timestamp, event.summary, event.actor, event.source, suffix
+                )
+                .replace("ActivitySource::", ""),
+            );
         }
     }
 

@@ -41,6 +41,7 @@ export interface CliInstallStatus {
   installPath: string;
   installed: boolean;
   installDirOnPath: boolean;
+  shellProfileConfigured: boolean;
   shellExport: string;
   shellProfile: string;
   persistCommand: string;

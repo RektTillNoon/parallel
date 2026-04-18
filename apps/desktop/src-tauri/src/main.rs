@@ -13,19 +13,19 @@ use std::{
 };
 
 use bridge::{
-    build_client_snippet, bundled_sidecar_binary_filename, clear_client_stale, find_available_port, generate_token,
-    mark_clients_stale, resolve_bridge_url, resolve_bundled_projectctl_path, BridgeRuntimeSnapshot,
-    BridgeSettings, BridgeStateEvent, DEFAULT_BRIDGE_PORT, BRIDGE_EVENT,
+    build_client_snippet, bundled_sidecar_binary_filename, clear_client_stale, find_available_port,
+    generate_token, mark_clients_stale, resolve_bridge_url, resolve_bundled_projectctl_path,
+    BridgeRuntimeSnapshot, BridgeSettings, BridgeStateEvent, BRIDGE_EVENT, DEFAULT_BRIDGE_PORT,
 };
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use parallel_workflow_core::{
-    add_blocker, add_note, add_watched_root_index_state, clear_blocker, complete_step,
-    get_board_project_detail, get_project as get_project_service,
+    add_blocker, add_note, add_watched_root_index_state, canonical_index_db_path, clear_blocker,
+    complete_step, get_board_project_detail, get_project as get_project_service,
     init_project as init_project_service, list_indexed_projects, list_projects,
     missing_watched_root_coverage, propose_decision, remove_watched_root_index_state,
     resolve_watched_roots, start_step, ActivitySource, BoardProjectDetail, DecisionProposalInput,
     InitProjectInput, MutationActor, ProjectSummary, RootResolutionSurface, SessionContextInput,
-    canonical_index_db_path, CANONICAL_INDEX_DB_FILE,
+    CANONICAL_INDEX_DB_FILE,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{
@@ -72,6 +72,7 @@ struct CliInstallStatus {
     install_path: String,
     installed: bool,
     install_dir_on_path: bool,
+    shell_profile_configured: bool,
     shell_export: String,
     shell_profile: String,
     persist_command: String,
@@ -144,12 +145,14 @@ fn ensure_settings(state: &AppState) -> Result<Settings, String> {
         if let Some(parent) = state.settings_path.parent() {
             fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
-        let initial = serde_json::to_string_pretty(&PersistedSettings::default()).map_err(|error| error.to_string())?;
+        let initial = serde_json::to_string_pretty(&PersistedSettings::default())
+            .map_err(|error| error.to_string())?;
         fs::write(&state.settings_path, initial).map_err(|error| error.to_string())?;
     }
 
     let raw = fs::read_to_string(&state.settings_path).map_err(|error| error.to_string())?;
-    let persisted: PersistedSettings = serde_json::from_str(&raw).map_err(|error| error.to_string())?;
+    let persisted: PersistedSettings =
+        serde_json::from_str(&raw).map_err(|error| error.to_string())?;
     let watched_roots = resolve_desktop_watched_roots(
         state,
         env::var("PROJECT_WORKFLOW_WATCH_ROOTS").ok().as_deref(),
@@ -161,7 +164,10 @@ fn ensure_settings(state: &AppState) -> Result<Settings, String> {
     })
 }
 
-fn resolve_desktop_watched_roots(state: &AppState, env_roots: Option<&str>) -> Result<Vec<String>, String> {
+fn resolve_desktop_watched_roots(
+    state: &AppState,
+    env_roots: Option<&str>,
+) -> Result<Vec<String>, String> {
     let index_db_path = index_db_path_string(&state);
     resolve_watched_roots(
         RootResolutionSurface::Desktop,
@@ -187,7 +193,9 @@ fn canonicalize_path(path: &Path) -> PathBuf {
 }
 
 fn canonicalize_path_string(raw: &str) -> String {
-    canonicalize_path(Path::new(raw)).to_string_lossy().into_owned()
+    canonicalize_path(Path::new(raw))
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn path_is_root_or_descendant(candidate: &str, root: &str) -> bool {
@@ -239,12 +247,18 @@ fn display_home_relative(path: &Path, home_dir: &Path) -> String {
 
 fn resolve_cli_install_path(path_env: Option<&str>, home_dir: &Path) -> PathBuf {
     let home_bin = home_dir.join("bin");
-    if path_entries(path_env).iter().any(|entry| entry == &home_bin) {
+    if path_entries(path_env)
+        .iter()
+        .any(|entry| entry == &home_bin)
+    {
         return home_bin.join(bundled_sidecar_binary_filename());
     }
 
     let local_bin = home_dir.join(".local").join("bin");
-    if path_entries(path_env).iter().any(|entry| entry == &local_bin) {
+    if path_entries(path_env)
+        .iter()
+        .any(|entry| entry == &local_bin)
+    {
         return local_bin.join(bundled_sidecar_binary_filename());
     }
 
@@ -260,6 +274,41 @@ fn install_dir_on_path(path_env: Option<&str>, install_path: &Path) -> bool {
         return false;
     };
     path_entries(path_env).iter().any(|entry| entry == parent)
+}
+
+fn install_dir_variants(install_dir: &Path, home_dir: &Path) -> Vec<String> {
+    let mut variants = vec![install_dir.to_string_lossy().into_owned()];
+    if let Ok(relative) = install_dir.strip_prefix(home_dir) {
+        let relative = relative.to_string_lossy();
+        variants.push(format!("$HOME/{relative}"));
+        variants.push(format!("~/{relative}"));
+    }
+    variants
+}
+
+fn shell_profile_configures_install_dir(
+    shell_profile: &Path,
+    install_path: &Path,
+    home_dir: &Path,
+) -> bool {
+    let Some(install_dir) = install_path.parent() else {
+        return false;
+    };
+    let Ok(contents) = fs::read_to_string(shell_profile) else {
+        return false;
+    };
+    let variants = install_dir_variants(install_dir, home_dir);
+
+    contents.lines().any(|line| {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            return false;
+        }
+        let updates_path = trimmed.contains("PATH")
+            || trimmed.contains("fish_add_path")
+            || trimmed.contains("fish_user_paths");
+        updates_path && variants.iter().any(|variant| trimmed.contains(variant))
+    })
 }
 
 fn cli_install_matches(install_path: &Path, bundled_path: &Path) -> bool {
@@ -279,15 +328,26 @@ fn build_cli_install_status(
     let shell_profile = shell_profile_path(shell_env, home_dir);
     let install_dir = install_path.parent().unwrap_or_else(|| Path::new("."));
     let shell_export = if shell_env.unwrap_or_default().contains("fish") {
-        format!("fish_add_path {}", display_home_relative(install_dir, home_dir))
+        format!(
+            "fish_add_path {}",
+            display_home_relative(install_dir, home_dir)
+        )
     } else {
-        format!("export PATH=\"{}:$PATH\"", display_home_relative(install_dir, home_dir))
+        format!(
+            "export PATH=\"{}:$PATH\"",
+            display_home_relative(install_dir, home_dir)
+        )
     };
     CliInstallStatus {
         bundled_path: bundled_path.to_string_lossy().into_owned(),
         install_path: install_path.to_string_lossy().into_owned(),
         installed: cli_install_matches(install_path, bundled_path),
         install_dir_on_path: install_dir_on_path(path_env, install_path),
+        shell_profile_configured: shell_profile_configures_install_dir(
+            &shell_profile,
+            install_path,
+            home_dir,
+        ),
         shell_export: shell_export.clone(),
         shell_profile: shell_profile.to_string_lossy().into_owned(),
         persist_command: if shell_env.unwrap_or_default().contains("fish") {
@@ -329,7 +389,10 @@ fn install_projectctl_entry(bundled_path: &Path, install_path: &Path) -> Result<
 
     if let Ok(metadata) = fs::symlink_metadata(install_path) {
         if metadata.file_type().is_dir() {
-            return Err(format!("CLI install path is a directory: {}", install_path.display()));
+            return Err(format!(
+                "CLI install path is a directory: {}",
+                install_path.display()
+            ));
         }
         if metadata.file_type().is_symlink() {
             fs::remove_file(install_path).map_err(|error| error.to_string())?;
@@ -406,11 +469,8 @@ fn now_iso() -> String {
 
 fn emit_bridge_state(app: &AppHandle, state: &AppState, reason: &str) -> Result<(), String> {
     let payload = bridge_state_payload(state, reason)?;
-    app.emit(
-        BRIDGE_EVENT,
-        payload,
-    )
-    .map_err(|error| error.to_string())
+    app.emit(BRIDGE_EVENT, payload)
+        .map_err(|error| error.to_string())
 }
 
 fn bridge_state_payload(state: &AppState, reason: &str) -> Result<BridgeStateEvent, String> {
@@ -465,7 +525,12 @@ fn wait_for_bridge_shutdown(state: &AppState, timeout: Duration) -> Result<(), S
     }
 }
 
-fn register_bridge_child(supervisor: &mut BridgeSupervisor, child: CommandChild, pid: u32, port: u16) {
+fn register_bridge_child(
+    supervisor: &mut BridgeSupervisor,
+    child: CommandChild,
+    pid: u32,
+    port: u16,
+) {
     supervisor.child = Some(child);
     supervisor.child_pid = Some(pid);
     supervisor.runtime.pid = Some(pid);
@@ -519,12 +584,20 @@ fn probe_bridge_health(port: u16, token: &str, timeout_ms: u64) -> Result<(), St
         .send()
     {
         Ok(response) if response.status().is_success() => Ok(()),
-        Ok(response) => Err(format!("Agent Bridge health returned {}", response.status())),
+        Ok(response) => Err(format!(
+            "Agent Bridge health returned {}",
+            response.status()
+        )),
         Err(error) => Err(error.to_string()),
     }
 }
 
-fn wait_for_bridge_health(port: u16, token: &str, attempts: usize, delay_ms: u64) -> Result<(), String> {
+fn wait_for_bridge_health(
+    port: u16,
+    token: &str,
+    attempts: usize,
+    delay_ms: u64,
+) -> Result<(), String> {
     let mut last_error = None;
     for _ in 0..attempts {
         match probe_bridge_health(port, token, delay_ms.max(250)) {
@@ -650,39 +723,55 @@ fn start_bridge(app: &AppHandle, state: &AppState) -> Result<(), String> {
                         "projectctl exited with code {:?} signal {:?}",
                         payload.code, payload.signal
                     );
-                    let intentional_stop = if let Ok(mut guard) = monitor_app.state::<AppState>().bridge.lock() {
-                        handle_terminated_bridge_process(&mut guard, monitored_pid)
-                    } else {
-                        false
-                    };
+                    let intentional_stop =
+                        if let Ok(mut guard) = monitor_app.state::<AppState>().bridge.lock() {
+                            handle_terminated_bridge_process(&mut guard, monitored_pid)
+                        } else {
+                            false
+                        };
                     if intentional_stop {
                         break;
                     }
                     if let Some(tx) = startup_tx.take() {
                         let _ = tx.send(Err(terminated_error.clone()));
                     }
-                    let _ = update_bridge_runtime(&monitor_app, &monitor_app.state::<AppState>(), "sidecarExited", |runtime| {
-                        runtime.status = "error".to_string();
-                        runtime.pid = None;
-                        runtime.started_at = None;
-                        runtime.last_error = Some(terminated_error.clone());
-                    });
+                    let _ = update_bridge_runtime(
+                        &monitor_app,
+                        &monitor_app.state::<AppState>(),
+                        "sidecarExited",
+                        |runtime| {
+                            runtime.status = "error".to_string();
+                            runtime.pid = None;
+                            runtime.started_at = None;
+                            runtime.last_error = Some(terminated_error.clone());
+                        },
+                    );
                     break;
                 }
                 CommandEvent::Error(message) => {
                     if let Some(tx) = startup_tx.take() {
                         let _ = tx.send(Err(message.clone()));
                     }
-                    let _ = update_bridge_runtime(&monitor_app, &monitor_app.state::<AppState>(), "startFailed", |runtime| {
-                        runtime.last_error = Some(message.clone());
-                    });
+                    let _ = update_bridge_runtime(
+                        &monitor_app,
+                        &monitor_app.state::<AppState>(),
+                        "startFailed",
+                        |runtime| {
+                            runtime.last_error = Some(message.clone());
+                        },
+                    );
                 }
                 CommandEvent::Stderr(bytes) => {
                     let message = String::from_utf8_lossy(&bytes).trim().to_string();
                     if !message.is_empty() {
-                        let _ = update_bridge_runtime(&monitor_app, &monitor_app.state::<AppState>(), "startRequested", |runtime| {
-                            runtime.last_error = Some(message.clone());
-                        });
+                        let _ = update_bridge_runtime(
+                            &monitor_app,
+                            &monitor_app.state::<AppState>(),
+                            "startRequested",
+                            |runtime| {
+                                runtime.last_error = Some(message.clone());
+                            },
+                        );
                     }
                 }
                 _ => {}
@@ -694,7 +783,9 @@ fn start_bridge(app: &AppHandle, state: &AppState) -> Result<(), String> {
     let readiness_result = match startup_result {
         Ok(Ok(())) => wait_for_bridge_health(port, &settings.mcp.token, 10, 100),
         Ok(Err(error)) => Err(error),
-        Err(mpsc::RecvTimeoutError::Timeout) => wait_for_bridge_health(port, &settings.mcp.token, 30, 250),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            wait_for_bridge_health(port, &settings.mcp.token, 30, 250)
+        }
         Err(mpsc::RecvTimeoutError::Disconnected) => {
             Err("Agent Bridge startup channel disconnected before readiness".to_string())
         }
@@ -710,7 +801,9 @@ fn start_bridge(app: &AppHandle, state: &AppState) -> Result<(), String> {
             .clone();
         let _ = stop_bridge(app, state, "startFailed");
         let failure_message = match previous_error {
-            Some(previous) if !previous.trim().is_empty() => format!("{error}. Sidecar output: {previous}"),
+            Some(previous) if !previous.trim().is_empty() => {
+                format!("{error}. Sidecar output: {previous}")
+            }
             _ => error.clone(),
         };
         update_bridge_runtime(app, state, "startFailed", |runtime| {
@@ -854,12 +947,25 @@ fn sync_tray(app: &AppHandle, state: &AppState, payload: &LoadStatePayload) -> R
         .map(|next| format!("Next: {next}"))
         .unwrap_or_else(|| "Next: none".to_string());
 
-    handles.project.set_text(project_text).map_err(|error| error.to_string())?;
-    handles.step.set_text(step_text).map_err(|error| error.to_string())?;
-    handles.blockers.set_text(blocker_text).map_err(|error| error.to_string())?;
-    handles.next_action.set_text(next_text.clone()).map_err(|error| error.to_string())?;
+    handles
+        .project
+        .set_text(project_text)
+        .map_err(|error| error.to_string())?;
+    handles
+        .step
+        .set_text(step_text)
+        .map_err(|error| error.to_string())?;
+    handles
+        .blockers
+        .set_text(blocker_text)
+        .map_err(|error| error.to_string())?;
+    handles
+        .next_action
+        .set_text(next_text.clone())
+        .map_err(|error| error.to_string())?;
     if let Some(tray) = app.tray_by_id("workflow-tray") {
-        tray.set_tooltip(Some(next_text)).map_err(|error| error.to_string())?;
+        tray.set_tooltip(Some(next_text))
+            .map_err(|error| error.to_string())?;
     }
     Ok(())
 }
@@ -874,8 +980,13 @@ fn open_main_window(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn cleanup_suppressed_writes(entries: &mut HashMap<String, std::time::Instant>, now: std::time::Instant) {
-    entries.retain(|_, recorded| now.duration_since(*recorded) < Duration::from_millis(LOCAL_WRITE_SUPPRESSION_WINDOW_MS));
+fn cleanup_suppressed_writes(
+    entries: &mut HashMap<String, std::time::Instant>,
+    now: std::time::Instant,
+) {
+    entries.retain(|_, recorded| {
+        now.duration_since(*recorded) < Duration::from_millis(LOCAL_WRITE_SUPPRESSION_WINDOW_MS)
+    });
 }
 
 fn record_local_workflow_write(state: &AppState, root: &str) -> Result<(), String> {
@@ -912,8 +1023,9 @@ fn reload_watcher(app: &AppHandle, state: &AppState, settings: &Settings) -> Res
                 return;
             };
             let relevant = event.paths.iter().any(|path| {
-                path.components()
-                    .any(|component| component.as_os_str() == std::ffi::OsStr::new(".project-workflow"))
+                path.components().any(|component| {
+                    component.as_os_str() == std::ffi::OsStr::new(".project-workflow")
+                })
             });
             if !relevant {
                 return;
@@ -993,16 +1105,23 @@ fn snapshot_projects(state: &AppState, settings: &Settings) -> Result<Vec<Projec
     }
 }
 
-fn refreshed_projects(state: &AppState, settings: &Settings) -> Result<Vec<ProjectSummary>, String> {
+fn refreshed_projects(
+    state: &AppState,
+    settings: &Settings,
+) -> Result<Vec<ProjectSummary>, String> {
     if settings.watched_roots.is_empty() {
         return Ok(Vec::new());
     }
 
     let index_db_path = index_db_path_string(&state);
-    list_projects(&settings.watched_roots, index_db_path.as_str()).map_err(|error| error.to_string())
+    list_projects(&settings.watched_roots, index_db_path.as_str())
+        .map_err(|error| error.to_string())
 }
 
-fn build_snapshot_payload(state: &AppState, settings: &Settings) -> Result<LoadStatePayload, String> {
+fn build_snapshot_payload(
+    state: &AppState,
+    settings: &Settings,
+) -> Result<LoadStatePayload, String> {
     let projects = snapshot_projects(state, settings)?;
     let board_projects = build_board_projects(&projects)?;
     let mcp_runtime = state
@@ -1019,7 +1138,10 @@ fn build_snapshot_payload(state: &AppState, settings: &Settings) -> Result<LoadS
     })
 }
 
-fn build_refreshed_payload(state: &AppState, settings: &Settings) -> Result<LoadStatePayload, String> {
+fn build_refreshed_payload(
+    state: &AppState,
+    settings: &Settings,
+) -> Result<LoadStatePayload, String> {
     let projects = refreshed_projects(state, settings)?;
     let board_projects = build_board_projects(&projects)?;
     let mcp_runtime = state
@@ -1036,15 +1158,20 @@ fn build_refreshed_payload(state: &AppState, settings: &Settings) -> Result<Load
     })
 }
 
-fn watched_roots_need_startup_refresh(state: &AppState, settings: &Settings) -> Result<bool, String> {
+fn watched_roots_need_startup_refresh(
+    state: &AppState,
+    settings: &Settings,
+) -> Result<bool, String> {
     if settings.watched_roots.is_empty() {
         return Ok(false);
     }
 
     let index_db_path = index_db_path_string(&state);
-    Ok(!missing_watched_root_coverage(&settings.watched_roots, index_db_path.as_str())
-        .map_err(|error| error.to_string())?
-        .is_empty())
+    Ok(
+        !missing_watched_root_coverage(&settings.watched_roots, index_db_path.as_str())
+            .map_err(|error| error.to_string())?
+            .is_empty(),
+    )
 }
 
 #[tauri::command]
@@ -1061,14 +1188,19 @@ fn refresh_projects(app: AppHandle, state: State<AppState>) -> Result<String, St
 fn add_watch_root(app: AppHandle, state: State<AppState>, root: String) -> Result<String, String> {
     let root = resolve_input_path(&root)?.to_string_lossy().into_owned();
     let index_db_path = index_db_path_string(&state);
-    add_watched_root_index_state(&root, index_db_path.as_str()).map_err(|error| error.to_string())?;
+    add_watched_root_index_state(&root, index_db_path.as_str())
+        .map_err(|error| error.to_string())?;
     let settings = ensure_settings(&state)?;
     reload_watcher(&app, &state, &settings)?;
     to_json_string(&refresh_projects_payload(&app, &state)?)
 }
 
 #[tauri::command]
-fn remove_watch_root(app: AppHandle, state: State<AppState>, root: String) -> Result<String, String> {
+fn remove_watch_root(
+    app: AppHandle,
+    state: State<AppState>,
+    root: String,
+) -> Result<String, String> {
     let mut settings = ensure_settings(&state)?;
     let root = canonicalize_path_string(root.trim());
     if settings
@@ -1081,17 +1213,15 @@ fn remove_watch_root(app: AppHandle, state: State<AppState>, root: String) -> Re
     }
     save_settings(&state, &settings)?;
     let index_db_path = index_db_path_string(&state);
-    remove_watched_root_index_state(&root, index_db_path.as_str()).map_err(|error| error.to_string())?;
+    remove_watched_root_index_state(&root, index_db_path.as_str())
+        .map_err(|error| error.to_string())?;
     let settings = ensure_settings(&state)?;
     reload_watcher(&app, &state, &settings)?;
     to_json_string(&refresh_projects_payload(&app, &state)?)
 }
 
 #[tauri::command]
-fn set_last_focused_project(
-    state: State<AppState>,
-    root: Option<String>,
-) -> Result<(), String> {
+fn set_last_focused_project(state: State<AppState>, root: Option<String>) -> Result<(), String> {
     let mut settings = ensure_settings(&state)?;
     settings.last_focused_project = root;
     save_settings(&state, &settings)?;
@@ -1105,7 +1235,12 @@ fn get_project(root: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn init_project(app: AppHandle, state: State<AppState>, root: String, name: String) -> Result<String, String> {
+fn init_project(
+    app: AppHandle,
+    state: State<AppState>,
+    root: String,
+    name: String,
+) -> Result<String, String> {
     let index_db_path = index_db_path_string(&state);
     init_project_service(InitProjectInput {
         root: root.clone(),
@@ -1127,7 +1262,12 @@ fn init_project(app: AppHandle, state: State<AppState>, root: String, name: Stri
 }
 
 #[tauri::command]
-fn start_step_cmd(app: AppHandle, state: State<AppState>, root: String, step_id: String) -> Result<String, String> {
+fn start_step_cmd(
+    app: AppHandle,
+    state: State<AppState>,
+    root: String,
+    step_id: String,
+) -> Result<String, String> {
     let index_db_path = index_db_path_string(&state);
     let result = start_step(
         &root,
@@ -1141,7 +1281,12 @@ fn start_step_cmd(app: AppHandle, state: State<AppState>, root: String, step_id:
 }
 
 #[tauri::command]
-fn complete_step_cmd(app: AppHandle, state: State<AppState>, root: String, step_id: String) -> Result<String, String> {
+fn complete_step_cmd(
+    app: AppHandle,
+    state: State<AppState>,
+    root: String,
+    step_id: String,
+) -> Result<String, String> {
     let index_db_path = index_db_path_string(&state);
     let result = complete_step(
         &root,
@@ -1155,7 +1300,12 @@ fn complete_step_cmd(app: AppHandle, state: State<AppState>, root: String, step_
 }
 
 #[tauri::command]
-fn add_blocker_cmd(app: AppHandle, state: State<AppState>, root: String, blocker: String) -> Result<String, String> {
+fn add_blocker_cmd(
+    app: AppHandle,
+    state: State<AppState>,
+    root: String,
+    blocker: String,
+) -> Result<String, String> {
     let index_db_path = index_db_path_string(&state);
     let result = add_blocker(
         &root,
@@ -1188,7 +1338,12 @@ fn clear_blocker_cmd(
 }
 
 #[tauri::command]
-fn add_note_cmd(app: AppHandle, state: State<AppState>, root: String, note: String) -> Result<String, String> {
+fn add_note_cmd(
+    app: AppHandle,
+    state: State<AppState>,
+    root: String,
+    note: String,
+) -> Result<String, String> {
     let index_db_path = index_db_path_string(&state);
     let result = add_note(
         &root,
@@ -1339,16 +1494,16 @@ fn install_cli_cmd() -> Result<String, String> {
 fn build_tray(app: &AppHandle, state: &AppState) -> Result<(), String> {
     let project_item = MenuItem::with_id(app, "project", "Project: none", false, None::<&str>)
         .map_err(|error| error.to_string())?;
-    let step_item =
-        MenuItem::with_id(app, "step", "Step: none", false, None::<&str>).map_err(|error| error.to_string())?;
+    let step_item = MenuItem::with_id(app, "step", "Step: none", false, None::<&str>)
+        .map_err(|error| error.to_string())?;
     let blockers_item = MenuItem::with_id(app, "blockers", "Blockers: 0", false, None::<&str>)
         .map_err(|error| error.to_string())?;
     let next_item = MenuItem::with_id(app, "next", "Next: none", false, None::<&str>)
         .map_err(|error| error.to_string())?;
     let open_item = MenuItem::with_id(app, "open", "Open dashboard", true, None::<&str>)
         .map_err(|error| error.to_string())?;
-    let quit_item =
-        MenuItem::with_id(app, "quit", "Quit", true, None::<&str>).map_err(|error| error.to_string())?;
+    let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)
+        .map_err(|error| error.to_string())?;
     let separator = PredefinedMenuItem::separator(app).map_err(|error| error.to_string())?;
 
     let menu = MenuBuilder::new(app)
@@ -1601,9 +1756,11 @@ mod tests {
             },
         };
 
-        assert!(watched_roots_need_startup_refresh(&state, &settings).expect("coverage check should work"));
+        assert!(watched_roots_need_startup_refresh(&state, &settings)
+            .expect("coverage check should work"));
         build_refreshed_payload(&state, &settings).expect("refresh payload should build");
-        assert!(!watched_roots_need_startup_refresh(&state, &settings).expect("coverage should now exist"));
+        assert!(!watched_roots_need_startup_refresh(&state, &settings)
+            .expect("coverage should now exist"));
     }
 
     #[test]
@@ -1626,8 +1783,8 @@ mod tests {
         .expect("canonical root should store");
 
         let env_root_raw = env_root.display().to_string();
-        let resolved =
-            resolve_desktop_watched_roots(&state, Some(env_root_raw.as_str())).expect("desktop roots should resolve");
+        let resolved = resolve_desktop_watched_roots(&state, Some(env_root_raw.as_str()))
+            .expect("desktop roots should resolve");
 
         assert_eq!(
             resolved,
@@ -1644,7 +1801,8 @@ mod tests {
         let base = unique_temp_dir("suppression");
         let state = test_state(&base);
         let repo = base.join("repo");
-        fs::create_dir_all(repo.join(".project-workflow/local")).expect("workflow dir should create");
+        fs::create_dir_all(repo.join(".project-workflow/local"))
+            .expect("workflow dir should create");
         fs::write(
             repo.join(".project-workflow/local/runtime.yaml"),
             "status: todo\n",
@@ -1664,21 +1822,34 @@ mod tests {
     fn root_or_descendant_check_excludes_sibling_paths() {
         let root = "/tmp/workspace/root";
         assert!(path_is_root_or_descendant("/tmp/workspace/root", root));
-        assert!(path_is_root_or_descendant("/tmp/workspace/root/nested/project", root));
-        assert!(!path_is_root_or_descendant("/tmp/workspace/root-sibling", root));
+        assert!(path_is_root_or_descendant(
+            "/tmp/workspace/root/nested/project",
+            root
+        ));
+        assert!(!path_is_root_or_descendant(
+            "/tmp/workspace/root-sibling",
+            root
+        ));
     }
 
     #[test]
     fn cli_install_path_prefers_visible_home_bin_on_macos() {
         let home = PathBuf::from("/tmp/test-home");
         let install = resolve_cli_install_path(Some("/usr/bin:/tmp/test-home/bin"), &home);
-        assert_eq!(install, home.join("bin").join(bundled_sidecar_binary_filename()));
+        assert_eq!(
+            install,
+            home.join("bin").join(bundled_sidecar_binary_filename())
+        );
     }
 
     #[test]
     fn cli_install_status_reports_path_export_command() {
         let home = PathBuf::from("/tmp/test-home");
-        let bundled = home.join("parallel.app").join("Contents").join("MacOS").join("projectctl");
+        let bundled = home
+            .join("parallel.app")
+            .join("Contents")
+            .join("MacOS")
+            .join("projectctl");
         let install = home.join("bin").join("projectctl");
         let status = build_cli_install_status(
             &bundled,
@@ -1698,10 +1869,40 @@ mod tests {
     }
 
     #[test]
+    fn cli_install_status_detects_shell_profile_path_configuration() {
+        let home = unique_temp_dir("cli-shell-profile");
+        let shell_profile = home.join(".zshrc");
+        fs::write(&shell_profile, "export PATH=\"$HOME/bin:$PATH\"\n")
+            .expect("shell profile should write");
+
+        let bundled = home
+            .join("parallel.app")
+            .join("Contents")
+            .join("MacOS")
+            .join("projectctl");
+        let install = home.join("bin").join("projectctl");
+        let status = build_cli_install_status(
+            &bundled,
+            &install,
+            Some("/usr/bin"),
+            Some("/bin/zsh"),
+            &home,
+        );
+
+        assert!(!status.install_dir_on_path);
+        assert!(status.shell_profile_configured);
+    }
+
+    #[test]
     fn install_projectctl_entry_creates_cli_link() {
         let base = unique_temp_dir("cli-install");
-        let bundled = base.join("parallel.app").join("Contents").join("MacOS").join("projectctl");
-        fs::create_dir_all(bundled.parent().expect("bundled parent")).expect("bundled dir should create");
+        let bundled = base
+            .join("parallel.app")
+            .join("Contents")
+            .join("MacOS")
+            .join("projectctl");
+        fs::create_dir_all(bundled.parent().expect("bundled parent"))
+            .expect("bundled dir should create");
         fs::write(&bundled, "cli").expect("bundled binary should write");
 
         let install = base.join("bin").join("projectctl");
@@ -1742,18 +1943,23 @@ mod tests {
             },
         };
 
-        let refreshed = build_refreshed_payload(&state, &settings).expect("refresh should discover indexed repo");
+        let refreshed = build_refreshed_payload(&state, &settings)
+            .expect("refresh should discover indexed repo");
         assert_eq!(refreshed.projects.len(), 1);
         assert_eq!(refreshed.board_projects.len(), 1);
 
         let repo_two = watched_root.join("repo-two");
         create_repo(&repo_two);
 
-        let snapshot = build_snapshot_payload(&state, &settings).expect("snapshot should use index only");
+        let snapshot =
+            build_snapshot_payload(&state, &settings).expect("snapshot should use index only");
         assert_eq!(snapshot.projects.len(), 1);
-        assert!(snapshot.projects[0].root.ends_with("/watched-root/repo-one"));
+        assert!(snapshot.projects[0]
+            .root
+            .ends_with("/watched-root/repo-one"));
 
-        let refreshed_again = build_refreshed_payload(&state, &settings).expect("refresh should discover repo two");
+        let refreshed_again =
+            build_refreshed_payload(&state, &settings).expect("refresh should discover repo two");
         assert_eq!(refreshed_again.projects.len(), 2);
         assert!(refreshed_again
             .projects
@@ -1767,14 +1973,19 @@ mod tests {
         let base = unique_temp_dir("index-migration");
         let legacy_index = base.join("legacy").join("workflow-index.sqlite");
         let canonical_index = base.join("canonical").join("workflow-index.sqlite");
-        fs::create_dir_all(legacy_index.parent().expect("legacy parent")).expect("legacy dir should create");
+        fs::create_dir_all(legacy_index.parent().expect("legacy parent"))
+            .expect("legacy dir should create");
         fs::write(&legacy_index, "legacy").expect("legacy index should write");
 
-        let resolved = finalize_desktop_index_path(legacy_index.clone(), Some(canonical_index.clone()))
-            .expect("index path should resolve");
+        let resolved =
+            finalize_desktop_index_path(legacy_index.clone(), Some(canonical_index.clone()))
+                .expect("index path should resolve");
 
         assert_eq!(resolved, canonical_index);
         assert!(!legacy_index.exists());
-        assert_eq!(fs::read_to_string(&canonical_index).expect("canonical index should exist"), "legacy");
+        assert_eq!(
+            fs::read_to_string(&canonical_index).expect("canonical index should exist"),
+            "legacy"
+        );
     }
 }

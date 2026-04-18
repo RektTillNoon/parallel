@@ -45,7 +45,8 @@ pub fn get_workflow_paths(root: impl AsRef<Path>) -> WorkflowPaths {
 }
 
 pub fn ensure_dir(path: impl AsRef<Path>) -> Result<()> {
-    fs::create_dir_all(path.as_ref()).with_context(|| format!("create dir {}", path.as_ref().display()))
+    fs::create_dir_all(path.as_ref())
+        .with_context(|| format!("create dir {}", path.as_ref().display()))
 }
 
 pub fn path_exists(path: impl AsRef<Path>) -> bool {
@@ -79,7 +80,11 @@ pub fn write_yaml_atomic<T: Serialize>(path: impl AsRef<Path>, data: &T) -> Resu
         .parent()
         .ok_or_else(|| anyhow!("yaml target has no parent: {}", path.display()))?;
     ensure_dir(dir)?;
-    let temp_path = dir.join(format!(".{}.{}.tmp", path.file_name().unwrap().to_string_lossy(), Uuid::new_v4()));
+    let temp_path = dir.join(format!(
+        ".{}.{}.tmp",
+        path.file_name().unwrap().to_string_lossy(),
+        Uuid::new_v4()
+    ));
     let body = serde_yaml::to_string(data)?;
     fs::write(&temp_path, body).with_context(|| format!("write {}", temp_path.display()))?;
     fs::rename(&temp_path, path)
@@ -92,7 +97,11 @@ pub fn write_text_atomic(path: impl AsRef<Path>, body: &str) -> Result<()> {
         .parent()
         .ok_or_else(|| anyhow!("text target has no parent: {}", path.display()))?;
     ensure_dir(dir)?;
-    let temp_path = dir.join(format!(".{}.{}.tmp", path.file_name().unwrap().to_string_lossy(), Uuid::new_v4()));
+    let temp_path = dir.join(format!(
+        ".{}.{}.tmp",
+        path.file_name().unwrap().to_string_lossy(),
+        Uuid::new_v4()
+    ));
     fs::write(&temp_path, body).with_context(|| format!("write {}", temp_path.display()))?;
     fs::rename(&temp_path, path)
         .with_context(|| format!("rename {} -> {}", temp_path.display(), path.display()))

@@ -1,6 +1,6 @@
 import type { ChangeEvent, FormEvent } from 'react';
 
-import type { BridgeStatusPresentation } from '../lib/state';
+import { describeCliInstallStatus, type BridgeStatusPresentation } from '../lib/state';
 import type { CliInstallStatus } from '../lib/types';
 
 import CollapsibleSection from './CollapsibleSection';
@@ -73,6 +73,8 @@ export default function SettingsModal({
   if (!settingsOpen) {
     return null;
   }
+
+  const cliPresentation = describeCliInstallStatus(cliStatus);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -217,15 +219,7 @@ export default function SettingsModal({
             <div className="bridge-meta">
               <div>
                 <label>Status</label>
-                <strong className={`status status-${cliStatus?.installed && cliStatus?.installDirOnPath ? 'positive' : 'caution'}`}>
-                  {cliStatus
-                    ? cliStatus.installed
-                      ? cliStatus.installDirOnPath
-                        ? 'Ready'
-                        : 'Installed, PATH update needed'
-                      : 'Not installed'
-                    : 'Checking…'}
-                </strong>
+                <strong className={`status status-${cliPresentation.tone}`}>{cliPresentation.label}</strong>
               </div>
               <div>
                 <label>Install path</label>
@@ -236,12 +230,10 @@ export default function SettingsModal({
                 <code className="bridge-url">{cliStatus?.bundledPath ?? 'Checking…'}</code>
               </div>
             </div>
-            {cliStatus && !cliStatus.installDirOnPath ? (
-              <div className="bridge-warning">
-                Add the install directory to your shell path. Profile: {cliStatus.shellProfile}
-              </div>
+            {cliPresentation.detail ? (
+              <div className="bridge-warning">{cliPresentation.detail}</div>
             ) : null}
-            {cliStatus && !cliStatus.installDirOnPath ? (
+            {cliStatus && cliPresentation.needsShellSetup ? (
               <div className="root-list cli-setup-list">
                 <div className="root-row">
                   <code>{cliStatus.persistCommand}</code>
@@ -255,7 +247,7 @@ export default function SettingsModal({
               <button
                 type="button"
                 onClick={onCopyCliSetup}
-                disabled={!cliStatus || cliStatus.installDirOnPath}
+                disabled={!cliStatus || !cliPresentation.needsShellSetup}
               >
                 Copy shell setup
               </button>

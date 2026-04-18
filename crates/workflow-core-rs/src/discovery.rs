@@ -7,7 +7,15 @@ use std::{
 use anyhow::Result;
 use walkdir::{DirEntry, WalkDir};
 
-const DISCOVERY_IGNORES: &[&str] = &["node_modules", ".pnpm", "dist", "build", "target", ".next", "coverage"];
+const DISCOVERY_IGNORES: &[&str] = &[
+    "node_modules",
+    ".pnpm",
+    "dist",
+    "build",
+    "target",
+    ".next",
+    "coverage",
+];
 
 fn should_descend(entry: &DirEntry) -> bool {
     if entry.depth() == 0 {
@@ -37,7 +45,11 @@ pub fn discover_git_repos(roots: &[String]) -> Result<Vec<String>> {
         }
 
         if root_path.join(".git").exists() {
-            discovered.insert(normalized_existing_path(root_path).to_string_lossy().into_owned());
+            discovered.insert(
+                normalized_existing_path(root_path)
+                    .to_string_lossy()
+                    .into_owned(),
+            );
         }
 
         for entry in WalkDir::new(root_path)
@@ -52,7 +64,11 @@ pub fn discover_git_repos(roots: &[String]) -> Result<Vec<String>> {
 
             if entry.file_name() == ".git" {
                 if let Some(repo_root) = entry.path().parent() {
-                    discovered.insert(normalized_existing_path(repo_root).to_string_lossy().into_owned());
+                    discovered.insert(
+                        normalized_existing_path(repo_root)
+                            .to_string_lossy()
+                            .into_owned(),
+                    );
                 }
             }
         }
@@ -72,10 +88,16 @@ mod tests {
         let root = temp.path();
 
         fs::create_dir_all(root.join("visible-repo/.git"))?;
-        fs::write(root.join("visible-repo/.git/HEAD"), "ref: refs/heads/main\n")?;
+        fs::write(
+            root.join("visible-repo/.git/HEAD"),
+            "ref: refs/heads/main\n",
+        )?;
 
         fs::create_dir_all(root.join(".hidden/ignored-repo/.git"))?;
-        fs::write(root.join(".hidden/ignored-repo/.git/HEAD"), "ref: refs/heads/main\n")?;
+        fs::write(
+            root.join(".hidden/ignored-repo/.git/HEAD"),
+            "ref: refs/heads/main\n",
+        )?;
 
         let discovered = discover_git_repos(&[root.display().to_string()])?;
 

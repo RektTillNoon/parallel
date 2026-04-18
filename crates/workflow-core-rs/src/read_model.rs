@@ -10,10 +10,13 @@ use anyhow::Result;
 use crate::{
     discovery::discover_git_repos,
     index_store::IndexStore,
-    models::{BoardProjectDetail, BoardStepDetail, ProjectIndexRecord, ProjectSummary, SessionStatus},
+    models::{
+        BoardProjectDetail, BoardStepDetail, ProjectIndexRecord, ProjectSummary, SessionStatus,
+    },
     root_paths::{canonicalize_root, normalize_roots, root_belongs_to_watched_root},
     services::{
-        determine_project_stale, find_current_step_title, get_plan_progress, get_project, locate_step,
+        determine_project_stale, find_current_step_title, get_plan_progress, get_project,
+        locate_step,
     },
     storage_yaml::{get_workflow_paths, now_iso, path_exists, read_git_branch},
 };
@@ -24,8 +27,10 @@ struct CachedProjection<T> {
     value: T,
 }
 
-static SUMMARY_CACHE: OnceLock<Mutex<HashMap<String, CachedProjection<ProjectSummary>>>> = OnceLock::new();
-static BOARD_CACHE: OnceLock<Mutex<HashMap<String, CachedProjection<BoardProjectDetail>>>> = OnceLock::new();
+static SUMMARY_CACHE: OnceLock<Mutex<HashMap<String, CachedProjection<ProjectSummary>>>> =
+    OnceLock::new();
+static BOARD_CACHE: OnceLock<Mutex<HashMap<String, CachedProjection<BoardProjectDetail>>>> =
+    OnceLock::new();
 
 fn summary_cache() -> &'static Mutex<HashMap<String, CachedProjection<ProjectSummary>>> {
     SUMMARY_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
@@ -36,7 +41,8 @@ fn board_cache() -> &'static Mutex<HashMap<String, CachedProjection<BoardProject
 }
 
 fn file_fingerprint(paths: &[PathBuf]) -> String {
-    paths.iter()
+    paths
+        .iter()
         .map(|path| match fs::metadata(path) {
             Ok(metadata) => {
                 let modified = metadata
@@ -130,7 +136,10 @@ fn build_initialized_summary(root: &str) -> Result<ProjectSummary> {
         stale: determine_project_stale(Some(&detail.runtime), repo_exists),
         missing: !repo_exists,
         current_step_id: detail.runtime.current_step_id.clone(),
-        current_step_title: find_current_step_title(&detail.plan, detail.runtime.current_step_id.as_deref()),
+        current_step_title: find_current_step_title(
+            &detail.plan,
+            detail.runtime.current_step_id.as_deref(),
+        ),
         blocker_count: detail.runtime.blockers.len() as i64,
         total_step_count: total,
         completed_step_count: completed,
@@ -217,17 +226,21 @@ pub fn board_project_detail(root: &str) -> Result<BoardProjectDetail> {
         let Some((_, _, _, step)) = locate_step(&detail.plan, step_id) else {
             continue;
         };
-        active_step_lookup.entry(step.id.clone()).or_insert(BoardStepDetail {
-            title: step.title.clone(),
-            summary: step.summary.clone(),
-        });
-    }
-    if let Some(step_id) = detail.runtime.current_step_id.as_deref() {
-        if let Some((_, _, _, step)) = locate_step(&detail.plan, step_id) {
-            active_step_lookup.entry(step.id.clone()).or_insert(BoardStepDetail {
+        active_step_lookup
+            .entry(step.id.clone())
+            .or_insert(BoardStepDetail {
                 title: step.title.clone(),
                 summary: step.summary.clone(),
             });
+    }
+    if let Some(step_id) = detail.runtime.current_step_id.as_deref() {
+        if let Some((_, _, _, step)) = locate_step(&detail.plan, step_id) {
+            active_step_lookup
+                .entry(step.id.clone())
+                .or_insert(BoardStepDetail {
+                    title: step.title.clone(),
+                    summary: step.summary.clone(),
+                });
         }
     }
 
@@ -310,7 +323,11 @@ mod tests {
         let root = temp.path().join("repo");
         fs::create_dir_all(root.join(".git"))?;
         fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n")?;
-        let index_db = temp.path().join("workflow-index.sqlite").display().to_string();
+        let index_db = temp
+            .path()
+            .join("workflow-index.sqlite")
+            .display()
+            .to_string();
 
         crate::init_project(InitProjectInput {
             root: root.display().to_string(),

@@ -13,11 +13,10 @@ use axum::{
 };
 use parallel_workflow_core::{
     add_blocker, append_activity_event, clear_blocker, complete_step, ensure_session, get_project,
-    list_projects, propose_decision, refresh_handoff, resolve_watched_roots, start_step,
-    sync_plan, update_runtime, ActivitySource, AppendActivityInput, DecisionProposalInput,
-    EnsureSessionInput, MutationActor, PlanSyncPhaseInput, PlanSyncStepInput,
-    PlanSyncSubtaskInput, RootResolutionSurface, RuntimePatchInput, SessionContextInput,
-    SyncPlanInput, SubtaskStatus,
+    list_projects, propose_decision, refresh_handoff, resolve_watched_roots, start_step, sync_plan,
+    update_runtime, ActivitySource, AppendActivityInput, DecisionProposalInput, EnsureSessionInput,
+    MutationActor, PlanSyncPhaseInput, PlanSyncStepInput, PlanSyncSubtaskInput,
+    RootResolutionSurface, RuntimePatchInput, SessionContextInput, SubtaskStatus, SyncPlanInput,
 };
 use schemars::{schema_for, JsonSchema};
 use serde::{Deserialize, Serialize};
@@ -445,11 +444,19 @@ async fn handle_mcp(
 
 fn authorize(headers: &HeaderMap, token: &str) -> Result<(), axum::response::Response> {
     let Some(value) = headers.get("authorization") else {
-        return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "missing authorization" }))).into_response());
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "missing authorization" })),
+        )
+            .into_response());
     };
     let expected = format!("Bearer {token}");
     if value.to_str().ok() != Some(expected.as_str()) {
-        return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "invalid bearer token" }))).into_response());
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "invalid bearer token" })),
+        )
+            .into_response());
     }
     Ok(())
 }
@@ -460,13 +467,18 @@ fn dispatch_request(backend: &dyn ToolBackend, request: JsonRpcRequest) -> Optio
     let response = match dispatch_method(backend, request) {
         Ok(Some(result)) => response_payload(id, result),
         Ok(None) => return None,
-        Err((code, message, response_id)) => error_response(response_id.unwrap_or(id), code, message),
+        Err((code, message, response_id)) => {
+            error_response(response_id.unwrap_or(id), code, message)
+        }
     };
 
     Some(response)
 }
 
-fn dispatch_method(backend: &dyn ToolBackend, request: JsonRpcRequest) -> Result<Option<Value>, (i32, String, Option<Value>)> {
+fn dispatch_method(
+    backend: &dyn ToolBackend,
+    request: JsonRpcRequest,
+) -> Result<Option<Value>, (i32, String, Option<Value>)> {
     if request.jsonrpc.as_deref() != Some(JSONRPC_VERSION) {
         return Err((-32600, "jsonrpc must be 2.0".to_string(), request.id));
     }
@@ -492,7 +504,9 @@ fn dispatch_method(backend: &dyn ToolBackend, request: JsonRpcRequest) -> Result
         "tools/list" => Ok(Some(json!({ "tools": tool_definitions() }))),
         "tools/call" => {
             let params: ToolCallParams = deserialize_params(request.params, request.id.clone())?;
-            let args = params.arguments.unwrap_or_else(|| Value::Object(Map::new()));
+            let args = params
+                .arguments
+                .unwrap_or_else(|| Value::Object(Map::new()));
             match backend.execute(&params.name, args) {
                 Ok(payload) => Ok(Some(json!({
                     "content": [
@@ -514,11 +528,18 @@ fn dispatch_method(backend: &dyn ToolBackend, request: JsonRpcRequest) -> Result
                 }))),
             }
         }
-        _ => Err((-32601, format!("unsupported method {}", request.method), request.id)),
+        _ => Err((
+            -32601,
+            format!("unsupported method {}", request.method),
+            request.id,
+        )),
     }
 }
 
-fn deserialize_params<T: for<'de> Deserialize<'de>>(params: Option<Value>, id: Option<Value>) -> Result<T, (i32, String, Option<Value>)> {
+fn deserialize_params<T: for<'de> Deserialize<'de>>(
+    params: Option<Value>,
+    id: Option<Value>,
+) -> Result<T, (i32, String, Option<Value>)> {
     let params = params.unwrap_or_else(|| Value::Object(Map::new()));
     serde_json::from_value(params).map_err(|error| (-32602, error.to_string(), id))
 }
@@ -559,7 +580,10 @@ impl ToolBackend for LocalBackend {
                     &self.index_db_path,
                     None,
                 )?;
-                Ok(serde_json::to_value(list_projects(&roots, &self.index_db_path)?)?)
+                Ok(serde_json::to_value(list_projects(
+                    &roots,
+                    &self.index_db_path,
+                )?)?)
             }
             "get_project" => {
                 let args: GetProjectArgs = serde_json::from_value(args)?;
@@ -574,7 +598,11 @@ impl ToolBackend for LocalBackend {
                     session_id: args.session_id,
                     session_title: args.session_title,
                     branch: args.branch,
-                    phases: args.phases.into_iter().map(into_phase_input).collect::<Result<Vec<_>>>()?,
+                    phases: args
+                        .phases
+                        .into_iter()
+                        .map(into_phase_input)
+                        .collect::<Result<Vec<_>>>()?,
                     index_db_path: self.index_db_path.clone(),
                 })?;
                 Ok(serde_json::to_value(result)?)
@@ -745,7 +773,9 @@ impl ToolBackend for RemoteBackend {
             bail!("remote bridge returned HTTP {}", response.status());
         }
 
-        let payload: Value = response.json().context("invalid remote bridge JSON-RPC response")?;
+        let payload: Value = response
+            .json()
+            .context("invalid remote bridge JSON-RPC response")?;
         if let Some(error) = payload.get("error") {
             bail!("remote bridge error: {}", error);
         }
@@ -759,7 +789,8 @@ impl ToolBackend for RemoteBackend {
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("remote bridge did not return tool content"))?;
 
-        serde_json::from_str(text).with_context(|| format!("remote bridge returned invalid JSON payload for {name}"))
+        serde_json::from_str(text)
+            .with_context(|| format!("remote bridge returned invalid JSON payload for {name}"))
     }
 }
 
@@ -778,7 +809,11 @@ fn into_phase_input(phase: PlanPhasePayload) -> Result<PlanSyncPhaseInput> {
     Ok(PlanSyncPhaseInput {
         id: phase.id,
         title: phase.title,
-        steps: phase.steps.into_iter().map(into_step_input).collect::<Result<Vec<_>>>()?,
+        steps: phase
+            .steps
+            .into_iter()
+            .map(into_step_input)
+            .collect::<Result<Vec<_>>>()?,
     })
 }
 
@@ -790,7 +825,12 @@ fn into_step_input(step: PlanStepPayload) -> Result<PlanSyncStepInput> {
         details: step.details,
         depends_on: step.depends_on,
         subtasks: match step.subtasks {
-            Some(subtasks) => Some(subtasks.into_iter().map(into_subtask_input).collect::<Result<Vec<_>>>()?),
+            Some(subtasks) => Some(
+                subtasks
+                    .into_iter()
+                    .map(into_subtask_input)
+                    .collect::<Result<Vec<_>>>()?,
+            ),
             None => None,
         },
     })
@@ -900,7 +940,11 @@ mod tests {
 
     fn create_index_db() -> Result<String> {
         let dir = tempfile::tempdir()?;
-        Ok(dir.keep().join("workflow-index.sqlite").display().to_string())
+        Ok(dir
+            .keep()
+            .join("workflow-index.sqlite")
+            .display()
+            .to_string())
     }
 
     fn create_repo() -> Result<String> {
@@ -911,7 +955,9 @@ mod tests {
         Ok(root.display().to_string())
     }
 
-    async fn spawn_server(config: ServeHttpConfig) -> Result<(u16, tokio::task::JoinHandle<Result<()>>)> {
+    async fn spawn_server(
+        config: ServeHttpConfig,
+    ) -> Result<(u16, tokio::task::JoinHandle<Result<()>>)> {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
         let port = listener.local_addr()?.port();
         drop(listener);
@@ -992,7 +1038,10 @@ mod tests {
     #[tokio::test]
     async fn tool_calls_return_existing_payload_shape() -> Result<()> {
         let repo = create_repo()?;
-        let index_db = std::path::Path::new(&repo).join(".app/index.sqlite").display().to_string();
+        let index_db = std::path::Path::new(&repo)
+            .join(".app/index.sqlite")
+            .display()
+            .to_string();
         parallel_workflow_core::init_project(InitProjectInput {
             root: repo.clone(),
             actor: "tester".to_string(),

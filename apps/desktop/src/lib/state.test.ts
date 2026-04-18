@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import type { LoadStatePayload } from './types';
+import type { CliInstallStatus, LoadStatePayload } from './types';
 import {
+  describeCliInstallStatus,
   describeBridgeStatus,
   resolveSelectionState,
   runBootstrapTasks,
@@ -205,6 +206,42 @@ describe('bridge status helpers', () => {
       tone: 'running',
       label: 'Ready',
       detail: 'Accepting local MCP requests on localhost.',
+    });
+  });
+});
+
+describe('cli install status helpers', () => {
+  const baseCliStatus: CliInstallStatus = {
+    bundledPath: '/Applications/parallel.app/Contents/MacOS/projectctl',
+    installPath: '/Users/light/bin/projectctl',
+    installed: true,
+    installDirOnPath: false,
+    shellProfileConfigured: false,
+    shellExport: 'export PATH="$HOME/bin:$PATH"',
+    shellProfile: '/Users/light/.zshrc',
+    persistCommand: 'echo \'export PATH="$HOME/bin:$PATH"\' >> $HOME/.zshrc',
+  };
+
+  it('treats shell profile configuration as ready for the next terminal session', () => {
+    expect(
+      describeCliInstallStatus({
+        ...baseCliStatus,
+        shellProfileConfigured: true,
+      }),
+    ).toEqual({
+      tone: 'positive',
+      label: 'Configured, open a new Terminal',
+      detail: 'Your shell profile already adds this directory. Open a new Terminal window or source the profile if projectctl is still not found.',
+      needsShellSetup: false,
+    });
+  });
+
+  it('keeps showing shell setup instructions when no path configuration exists', () => {
+    expect(describeCliInstallStatus(baseCliStatus)).toEqual({
+      tone: 'caution',
+      label: 'Installed, PATH update needed',
+      detail: 'Add the install directory to your shell path. Profile: /Users/light/.zshrc',
+      needsShellSetup: true,
     });
   });
 });
