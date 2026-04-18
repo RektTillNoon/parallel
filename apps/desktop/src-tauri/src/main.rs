@@ -150,7 +150,7 @@ fn ensure_settings(state: &AppState) -> Result<Settings, String> {
 }
 
 fn resolve_desktop_watched_roots(state: &AppState, env_roots: Option<&str>) -> Result<Vec<String>, String> {
-    let index_db_path = state.index_db_path.to_string_lossy().into_owned();
+    let index_db_path = index_db_path_string(&state);
     resolve_watched_roots(
         RootResolutionSurface::Desktop,
         None,
@@ -168,6 +168,26 @@ fn save_settings(state: &AppState, settings: &Settings) -> Result<(), String> {
     })
     .map_err(|error| error.to_string())?;
     fs::write(&state.settings_path, body).map_err(|error| error.to_string())
+}
+
+fn canonicalize_path(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn canonicalize_path_string(raw: &str) -> String {
+    canonicalize_path(Path::new(raw)).to_string_lossy().into_owned()
+}
+
+fn path_is_root_or_descendant(candidate: &str, root: &str) -> bool {
+    candidate == root || candidate.starts_with(&format!("{root}{}", std::path::MAIN_SEPARATOR))
+}
+
+fn workflow_dir_prefix(root: &str) -> String {
+    format!("{root}{}{}", std::path::MAIN_SEPARATOR, ".project-workflow")
+}
+
+fn index_db_path_string(state: &AppState) -> String {
+    state.index_db_path.to_string_lossy().into_owned()
 }
 
 fn resolve_input_path(raw: &str) -> Result<PathBuf, String> {
@@ -191,19 +211,22 @@ fn resolve_input_path(raw: &str) -> Result<PathBuf, String> {
         return Err(format!("Path does not exist: {}", expanded.display()));
     }
 
-    expanded.canonicalize().map_err(|error| error.to_string())
+    Ok(canonicalize_path(&expanded))
 }
 
 fn to_json_string<T: Serialize>(value: &T) -> Result<String, String> {
     serde_json::to_string(value).map_err(|error| error.to_string())
 }
 
-fn canonicalize_path_string(raw: &str) -> String {
-    PathBuf::from(raw)
-        .canonicalize()
-        .unwrap_or_else(|_| PathBuf::from(raw))
-        .to_string_lossy()
-        .into_owned()
+fn complete_local_workflow_mutation<T: Serialize>(
+    app: &AppHandle,
+    state: &AppState,
+    root: &str,
+    result: &T,
+) -> Result<String, String> {
+    let _ = record_local_workflow_write(state, root);
+    let _ = load_state_payload(app, state);
+    to_json_string(result)
 }
 
 fn desktop_actor() -> MutationActor {
@@ -440,7 +463,7 @@ fn start_bridge(app: &AppHandle, state: &AppState) -> Result<(), String> {
             "--token".to_string(),
             settings.mcp.token.clone(),
         ])
-        .env("PROJECT_WORKFLOW_INDEX_DB", state.index_db_path.to_string_lossy().into_owned());
+        .env("PROJECT_WORKFLOW_INDEX_DB", index_db_path_string(state));
 
     let (mut rx, child) = sidecar.spawn().map_err(|error| error.to_string())?;
     let pid = child.pid();
@@ -706,14 +729,10 @@ fn should_suppress_snapshot_event(state: &AppState, paths: &[PathBuf]) -> bool {
     let now = std::time::Instant::now();
     cleanup_suppressed_writes(&mut entries, now);
     paths.iter().any(|path| {
-        let normalized = path
-            .canonicalize()
-            .unwrap_or_else(|_| path.to_path_buf())
-            .to_string_lossy()
-            .into_owned();
+        let normalized = canonicalize_path(path).to_string_lossy().into_owned();
         entries
             .keys()
-            .any(|root| normalized.starts_with(&format!("{root}{}{}", std::path::MAIN_SEPARATOR, ".project-workflow")))
+            .any(|root| normalized.starts_with(&workflow_dir_prefix(root)))
     })
 }
 
@@ -801,7 +820,7 @@ fn snapshot_projects(state: &AppState, settings: &Settings) -> Result<Vec<Projec
     if settings.watched_roots.is_empty() {
         Ok(Vec::new())
     } else {
-        let index_db_path = state.index_db_path.to_string_lossy().into_owned();
+        let index_db_path = index_db_path_string(state);
         list_indexed_projects(&settings.watched_roots, index_db_path.as_str())
             .map_err(|error| error.to_string())
     }
@@ -812,7 +831,7 @@ fn refreshed_projects(state: &AppState, settings: &Settings) -> Result<Vec<Proje
         return Ok(Vec::new());
     }
 
-    let index_db_path = state.index_db_path.to_string_lossy().into_owned();
+    let index_db_path = index_db_path_string(&state);
     list_projects(&settings.watched_roots, index_db_path.as_str()).map_err(|error| error.to_string())
 }
 
@@ -855,7 +874,7 @@ fn watched_roots_need_startup_refresh(state: &AppState, settings: &Settings) -> 
         return Ok(false);
     }
 
-    let index_db_path = state.index_db_path.to_string_lossy().into_owned();
+    let index_db_path = index_db_path_string(&state);
     Ok(!missing_watched_root_coverage(&settings.watched_roots, index_db_path.as_str())
         .map_err(|error| error.to_string())?
         .is_empty())
@@ -874,7 +893,7 @@ fn refresh_projects(app: AppHandle, state: State<AppState>) -> Result<String, St
 #[tauri::command]
 fn add_watch_root(app: AppHandle, state: State<AppState>, root: String) -> Result<String, String> {
     let root = resolve_input_path(&root)?.to_string_lossy().into_owned();
-    let index_db_path = state.index_db_path.to_string_lossy().into_owned();
+    let index_db_path = index_db_path_string(&state);
     add_watched_root_index_state(&root, index_db_path.as_str()).map_err(|error| error.to_string())?;
     let settings = ensure_settings(&state)?;
     reload_watcher(&app, &state, &settings)?;
@@ -884,22 +903,17 @@ fn add_watch_root(app: AppHandle, state: State<AppState>, root: String) -> Resul
 #[tauri::command]
 fn remove_watch_root(app: AppHandle, state: State<AppState>, root: String) -> Result<String, String> {
     let mut settings = ensure_settings(&state)?;
-    let root_path = PathBuf::from(root.trim());
-    let root = root_path
-        .canonicalize()
-        .unwrap_or(root_path)
-        .to_string_lossy()
-        .into_owned();
+    let root = canonicalize_path_string(root.trim());
     if settings
         .last_focused_project
         .as_deref()
-        .map(|focused| focused == root || focused.starts_with(&format!("{root}{}", std::path::MAIN_SEPARATOR)))
+        .map(|focused| path_is_root_or_descendant(focused, &root))
         .unwrap_or(false)
     {
         settings.last_focused_project = None;
     }
     save_settings(&state, &settings)?;
-    let index_db_path = state.index_db_path.to_string_lossy().into_owned();
+    let index_db_path = index_db_path_string(&state);
     remove_watched_root_index_state(&root, index_db_path.as_str()).map_err(|error| error.to_string())?;
     let settings = ensure_settings(&state)?;
     reload_watcher(&app, &state, &settings)?;
@@ -925,7 +939,7 @@ fn get_project(root: String) -> Result<String, String> {
 
 #[tauri::command]
 fn init_project(app: AppHandle, state: State<AppState>, root: String, name: String) -> Result<String, String> {
-    let index_db_path = state.index_db_path.to_string_lossy().into_owned();
+    let index_db_path = index_db_path_string(&state);
     init_project_service(InitProjectInput {
         root: root.clone(),
         actor: DESKTOP_ACTOR_ID.to_string(),
@@ -947,7 +961,7 @@ fn init_project(app: AppHandle, state: State<AppState>, root: String, name: Stri
 
 #[tauri::command]
 fn start_step_cmd(app: AppHandle, state: State<AppState>, root: String, step_id: String) -> Result<String, String> {
-    let index_db_path = state.index_db_path.to_string_lossy().into_owned();
+    let index_db_path = index_db_path_string(&state);
     let result = start_step(
         &root,
         &step_id,
@@ -956,14 +970,12 @@ fn start_step_cmd(app: AppHandle, state: State<AppState>, root: String, step_id:
         index_db_path.as_str(),
     )
     .map_err(|error| error.to_string())?;
-    let _ = record_local_workflow_write(&state, &root);
-    let _ = load_state_payload(&app, &state);
-    to_json_string(&result)
+    complete_local_workflow_mutation(&app, &state, &root, &result)
 }
 
 #[tauri::command]
 fn complete_step_cmd(app: AppHandle, state: State<AppState>, root: String, step_id: String) -> Result<String, String> {
-    let index_db_path = state.index_db_path.to_string_lossy().into_owned();
+    let index_db_path = index_db_path_string(&state);
     let result = complete_step(
         &root,
         &step_id,
@@ -972,14 +984,12 @@ fn complete_step_cmd(app: AppHandle, state: State<AppState>, root: String, step_
         index_db_path.as_str(),
     )
     .map_err(|error| error.to_string())?;
-    let _ = record_local_workflow_write(&state, &root);
-    let _ = load_state_payload(&app, &state);
-    to_json_string(&result)
+    complete_local_workflow_mutation(&app, &state, &root, &result)
 }
 
 #[tauri::command]
 fn add_blocker_cmd(app: AppHandle, state: State<AppState>, root: String, blocker: String) -> Result<String, String> {
-    let index_db_path = state.index_db_path.to_string_lossy().into_owned();
+    let index_db_path = index_db_path_string(&state);
     let result = add_blocker(
         &root,
         &blocker,
@@ -988,9 +998,7 @@ fn add_blocker_cmd(app: AppHandle, state: State<AppState>, root: String, blocker
         index_db_path.as_str(),
     )
     .map_err(|error| error.to_string())?;
-    let _ = record_local_workflow_write(&state, &root);
-    let _ = load_state_payload(&app, &state);
-    to_json_string(&result)
+    complete_local_workflow_mutation(&app, &state, &root, &result)
 }
 
 #[tauri::command]
@@ -1000,7 +1008,7 @@ fn clear_blocker_cmd(
     root: String,
     blocker: Option<String>,
 ) -> Result<String, String> {
-    let index_db_path = state.index_db_path.to_string_lossy().into_owned();
+    let index_db_path = index_db_path_string(&state);
     let result = clear_blocker(
         &root,
         blocker.as_deref(),
@@ -1009,14 +1017,12 @@ fn clear_blocker_cmd(
         index_db_path.as_str(),
     )
     .map_err(|error| error.to_string())?;
-    let _ = record_local_workflow_write(&state, &root);
-    let _ = load_state_payload(&app, &state);
-    to_json_string(&result)
+    complete_local_workflow_mutation(&app, &state, &root, &result)
 }
 
 #[tauri::command]
 fn add_note_cmd(app: AppHandle, state: State<AppState>, root: String, note: String) -> Result<String, String> {
-    let index_db_path = state.index_db_path.to_string_lossy().into_owned();
+    let index_db_path = index_db_path_string(&state);
     let result = add_note(
         &root,
         &note,
@@ -1025,9 +1031,7 @@ fn add_note_cmd(app: AppHandle, state: State<AppState>, root: String, note: Stri
         index_db_path.as_str(),
     )
     .map_err(|error| error.to_string())?;
-    let _ = record_local_workflow_write(&state, &root);
-    let _ = load_state_payload(&app, &state);
-    to_json_string(&result)
+    complete_local_workflow_mutation(&app, &state, &root, &result)
 }
 
 #[tauri::command]
@@ -1040,7 +1044,7 @@ fn propose_decision_cmd(
     decision: String,
     impact: String,
 ) -> Result<String, String> {
-    let index_db_path = state.index_db_path.to_string_lossy().into_owned();
+    let index_db_path = index_db_path_string(&state);
     let result = propose_decision(
         &root,
         DecisionProposalInput {
@@ -1054,9 +1058,7 @@ fn propose_decision_cmd(
         index_db_path.as_str(),
     )
     .map_err(|error| error.to_string())?;
-    let _ = record_local_workflow_write(&state, &root);
-    let _ = load_state_payload(&app, &state);
-    to_json_string(&result)
+    complete_local_workflow_mutation(&app, &state, &root, &result)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1472,6 +1474,14 @@ mod tests {
             &state,
             &[repo.join(".project-workflow/local/runtime.yaml")]
         ));
+    }
+
+    #[test]
+    fn root_or_descendant_check_excludes_sibling_paths() {
+        let root = "/tmp/workspace/root";
+        assert!(path_is_root_or_descendant("/tmp/workspace/root", root));
+        assert!(path_is_root_or_descendant("/tmp/workspace/root/nested/project", root));
+        assert!(!path_is_root_or_descendant("/tmp/workspace/root-sibling", root));
     }
 
     #[test]

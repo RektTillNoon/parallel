@@ -61,6 +61,22 @@ fn required_flag(parsed: &ParsedArgs, name: &str) -> Result<String> {
     flag(parsed, name).ok_or_else(|| anyhow!("Missing required flag --{name}"))
 }
 
+fn split_comma_values(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn positional_tail_or_flag(parsed: &ParsedArgs, start_index: usize, flag_name: &str) -> String {
+    if parsed.positionals.len() > start_index {
+        parsed.positionals[start_index..].join(" ")
+    } else {
+        flag(parsed, flag_name).unwrap_or_default()
+    }
+}
+
 fn resolve_source(raw: Option<String>) -> ActivitySource {
     match raw.as_deref().unwrap_or("cli") {
         "cli" => ActivitySource::Cli,
@@ -230,6 +246,21 @@ fn phase_inputs_from_json(value: &Value) -> Result<Vec<PlanSyncPhaseInput>> {
         .collect()
 }
 
+fn resolve_serve_http_roots(parsed: &ParsedArgs) -> Vec<String> {
+    flag(parsed, "roots")
+        .map(|raw| split_comma_values(&raw))
+        .or_else(|| {
+            env::var("PROJECT_WORKFLOW_WATCH_ROOTS").ok().map(|raw| {
+                raw.split(if cfg!(windows) { ';' } else { ':' })
+                    .map(str::trim)
+                    .filter(|root| !root.is_empty())
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            })
+        })
+        .unwrap_or_default()
+}
+
 fn main() {
     if let Err(error) = run() {
         let argv: Vec<String> = env::args().skip(1).collect();
@@ -257,24 +288,7 @@ fn run() -> Result<()> {
             Some("serve-http") => {
                 let port = required_flag(&parsed, "port")?.parse::<u16>()?;
                 let token = required_flag(&parsed, "token")?;
-                let watched_roots = flag(&parsed, "roots")
-                    .map(|raw| {
-                        raw.split(',')
-                            .map(str::trim)
-                            .filter(|root| !root.is_empty())
-                            .map(ToString::to_string)
-                            .collect::<Vec<_>>()
-                    })
-                    .or_else(|| {
-                        env::var("PROJECT_WORKFLOW_WATCH_ROOTS").ok().map(|raw| {
-                            raw.split(if cfg!(windows) { ';' } else { ':' })
-                                .map(str::trim)
-                                .filter(|root| !root.is_empty())
-                                .map(ToString::to_string)
-                                .collect::<Vec<_>>()
-                        })
-                    })
-                    .unwrap_or_default();
+                let watched_roots = resolve_serve_http_roots(&parsed);
 
                 let runtime = tokio::runtime::Builder::new_multi_thread()
                     .enable_all()
@@ -294,14 +308,15 @@ fn run() -> Result<()> {
             _ => bail!("Unknown mcp subcommand \"{}\"", subcommand.unwrap_or_default()),
         },
         Some("init") => {
+            let root = resolve_root(&parsed);
             let project = init_project(InitProjectInput {
-                root: resolve_root(&parsed),
+                root,
                 actor: actor.actor,
                 source: actor.source,
                 name: flag(&parsed, "name"),
                 kind: flag(&parsed, "kind").or_else(|| Some("software".to_string())),
                 owner: flag(&parsed, "owner"),
-                tags: flag(&parsed, "tags").map(|tags| tags.split(',').map(|tag| tag.trim().to_string()).filter(|tag| !tag.is_empty()).collect()),
+                tags: flag(&parsed, "tags").map(|tags| split_comma_values(&tags)),
                 index_db_path,
             })?;
             print_result(&project)
@@ -311,32 +326,31 @@ fn run() -> Result<()> {
             print_result(&projects)
         }
         Some("show") => {
-            let project = get_project(&resolve_root(&parsed))?;
+            let root = resolve_root(&parsed);
+            let project = get_project(&root)?;
             print_result(&project)
         }
         Some("step") => {
+            let root = resolve_root(&parsed);
             let step_id = parsed.positionals.get(2).cloned().ok_or_else(|| anyhow!("Missing step id"))?;
             let result = if subcommand.as_deref() == Some("start") {
-                start_step(&resolve_root(&parsed), &step_id, actor, session_context, &index_db_path)?
+                start_step(&root, &step_id, actor, session_context, &index_db_path)?
             } else {
-                complete_step(&resolve_root(&parsed), &step_id, actor, session_context, &index_db_path)?
+                complete_step(&root, &step_id, actor, session_context, &index_db_path)?
             };
             print_result(&result)
         }
         Some("blocker") => {
-            let summary = if parsed.positionals.len() > 2 {
-                parsed.positionals[2..].join(" ")
-            } else {
-                flag(&parsed, "summary").unwrap_or_default()
-            };
+            let root = resolve_root(&parsed);
+            let summary = positional_tail_or_flag(&parsed, 2, "summary");
             let result = if subcommand.as_deref() == Some("add") {
                 if summary.trim().is_empty() {
                     bail!("Missing blocker summary");
                 }
-                add_blocker(&resolve_root(&parsed), &summary, actor, session_context, &index_db_path)?
+                add_blocker(&root, &summary, actor, session_context, &index_db_path)?
             } else {
                 clear_blocker(
-                    &resolve_root(&parsed),
+                    &root,
                     if summary.trim().is_empty() { None } else { Some(summary.as_str()) },
                     actor,
                     session_context,
@@ -346,23 +360,21 @@ fn run() -> Result<()> {
             print_result(&result)
         }
         Some("note") => {
-            let summary = if parsed.positionals.len() > 2 {
-                parsed.positionals[2..].join(" ")
-            } else {
-                flag(&parsed, "summary").unwrap_or_default()
-            };
+            let root = resolve_root(&parsed);
+            let summary = positional_tail_or_flag(&parsed, 2, "summary");
             if summary.trim().is_empty() {
                 bail!("Missing note summary");
             }
-            let result = add_note(&resolve_root(&parsed), &summary, actor, session_context, &index_db_path)?;
+            let result = add_note(&root, &summary, actor, session_context, &index_db_path)?;
             print_result(&result)
         }
         Some("session") => {
             if subcommand.as_deref() != Some("ensure") {
                 bail!("Unknown session subcommand \"{}\"", subcommand.unwrap_or_default());
             }
+            let root = resolve_root(&parsed);
             let result = ensure_session(EnsureSessionInput {
-                root: resolve_root(&parsed),
+                root,
                 actor: actor.actor,
                 source: actor.source,
                 session_id: session_context.session_id,
@@ -379,8 +391,9 @@ fn run() -> Result<()> {
             let plan_arg = required_flag(&parsed, "plan")?;
             let parsed_plan: JsonValue = serde_json::from_str(&plan_arg)?;
             let phases = phase_inputs_from_json(&parsed_plan)?;
+            let root = resolve_root(&parsed);
             let result = sync_plan(SyncPlanInput {
-                root: resolve_root(&parsed),
+                root,
                 actor: actor.actor,
                 source: actor.source,
                 session_id: session_context.session_id,
@@ -395,12 +408,9 @@ fn run() -> Result<()> {
             if subcommand.as_deref() != Some("add") {
                 bail!("Unknown activity subcommand \"{}\"", subcommand.unwrap_or_default());
             }
+            let root = resolve_root(&parsed);
             let event_type = required_flag(&parsed, "type")?;
-            let summary = if parsed.positionals.len() > 2 {
-                parsed.positionals[2..].join(" ")
-            } else {
-                flag(&parsed, "summary").unwrap_or_default()
-            };
+            let summary = positional_tail_or_flag(&parsed, 2, "summary");
             if summary.trim().is_empty() {
                 bail!("Missing activity summary");
             }
@@ -408,7 +418,7 @@ fn run() -> Result<()> {
                 .map(|raw| serde_json::from_str(&raw))
                 .transpose()?;
             let result = append_activity_event(
-                &resolve_root(&parsed),
+                &root,
                 AppendActivityInput {
                     actor: actor.actor,
                     source: actor.source,
@@ -426,13 +436,15 @@ fn run() -> Result<()> {
             print_result(&result)
         }
         Some("handoff") => {
-            let result = refresh_handoff(&resolve_root(&parsed), actor, &index_db_path)?;
+            let root = resolve_root(&parsed);
+            let result = refresh_handoff(&root, actor, &index_db_path)?;
             print_result(&result)
         }
         Some("decision") => {
+            let root = resolve_root(&parsed);
             if subcommand.as_deref() == Some("propose") {
                 let result = propose_decision(
-                    &resolve_root(&parsed),
+                    &root,
                     DecisionProposalInput {
                         title: required_flag(&parsed, "title")?,
                         context: flag(&parsed, "context").unwrap_or_default(),
@@ -448,7 +460,7 @@ fn run() -> Result<()> {
             if subcommand.as_deref() == Some("accept") {
                 ensure_human_authority(&parsed)?;
                 let proposal_id = parsed.positionals.get(2).cloned().or_else(|| flag(&parsed, "proposal-id")).ok_or_else(|| anyhow!("Missing proposal id"))?;
-                let result = accept_decision(&resolve_root(&parsed), &proposal_id, actor, &index_db_path)?;
+                let result = accept_decision(&root, &proposal_id, actor, &index_db_path)?;
                 return print_result(&result);
             }
             bail!("Unknown decision subcommand \"{}\"", subcommand.unwrap_or_default());
@@ -460,8 +472,9 @@ fn run() -> Result<()> {
                 .as_object()
                 .cloned()
                 .ok_or_else(|| anyhow!("--patch JSON must be an object"))?;
+            let root = resolve_root(&parsed);
             let result = update_runtime(RuntimePatchInput {
-                root: resolve_root(&parsed),
+                root,
                 actor: actor.actor,
                 source: actor.source,
                 patch: patch_map,
@@ -516,5 +529,24 @@ mod tests {
         assert_eq!(payload["indexDb"]["envVar"], "PROJECT_WORKFLOW_INDEX_DB");
         assert_eq!(payload["indexDb"]["precedence"][0], "--index-db");
         assert!(payload["indexDb"]["defaultPath"].is_string() || payload["indexDb"]["defaultPath"].is_null());
+    }
+
+    #[test]
+    fn split_comma_values_trims_and_drops_empty_entries() {
+        assert_eq!(
+            split_comma_values(" alpha, beta ,, gamma "),
+            vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()]
+        );
+    }
+
+    #[test]
+    fn positional_tail_or_flag_prefers_positional_tail() {
+        let parsed = ParsedArgs {
+            positionals: vec!["note".to_string(), "add".to_string(), "from".to_string(), "tail".to_string()],
+            flags: [("summary".to_string(), "from flag".to_string())].into_iter().collect(),
+            booleans: Default::default(),
+        };
+
+        assert_eq!(positional_tail_or_flag(&parsed, 2, "summary"), "from tail");
     }
 }
