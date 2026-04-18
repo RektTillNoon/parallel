@@ -6,5 +6,10 @@ target
 src-tauri/target
 *.tsbuildinfo
 
-.project-workflow/
-.superpowers/
+# Ignore repo-local hidden workdirs by default, but keep committed contract dirs.
+/.*/
+!/.agents/
+!/.github/
+
+/.project-workflow/
+/.superpowers/

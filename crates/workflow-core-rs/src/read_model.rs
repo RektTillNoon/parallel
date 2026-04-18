@@ -8,7 +8,7 @@ use std::{
 use anyhow::Result;
 
 use crate::{
-    discovery::discover_git_repos,
+    discovery::discover_project_roots,
     index_store::IndexStore,
     models::{
         BoardProjectDetail, BoardStepDetail, ProjectIndexRecord, ProjectSummary, SessionStatus,
@@ -268,7 +268,7 @@ pub fn board_project_detail(root: &str) -> Result<BoardProjectDetail> {
 
 pub fn list_projects(roots: &[String], index_db_path: &str) -> Result<Vec<ProjectSummary>> {
     let roots = normalize_roots(roots.iter().cloned());
-    let discovered_roots = discover_git_repos(&roots)?;
+    let discovered_roots = discover_project_roots(&roots)?;
     let store = IndexStore::new(index_db_path.to_string())?;
 
     for repo_root in &discovered_roots {
@@ -347,6 +347,47 @@ mod tests {
 
         let second = project_summary(root.display().to_string().as_str())?;
         assert_ne!(first.status, second.status);
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_discovers_visible_plain_directories_and_skips_hidden_ones() -> Result<()> {
+        let temp = tempdir()?;
+        let watched_root = temp.path().join("watched");
+        fs::create_dir_all(&watched_root)?;
+
+        let plain_project = watched_root.join("plain-project");
+        fs::create_dir_all(&plain_project)?;
+
+        let git_project = watched_root.join("git-project");
+        fs::create_dir_all(git_project.join(".git"))?;
+        fs::write(git_project.join(".git/HEAD"), "ref: refs/heads/main\n")?;
+
+        let hidden_project = watched_root.join(".hidden-project");
+        fs::create_dir_all(&hidden_project)?;
+
+        let index_db = temp
+            .path()
+            .join("workflow-index.sqlite")
+            .display()
+            .to_string();
+
+        let summaries = list_projects(&[watched_root.display().to_string()], &index_db)?;
+
+        assert_eq!(summaries.len(), 2);
+        assert!(summaries
+            .iter()
+            .any(|summary| summary.root.ends_with("/watched/plain-project")));
+        assert!(summaries
+            .iter()
+            .any(|summary| summary.root.ends_with("/watched/git-project")));
+        assert!(!summaries
+            .iter()
+            .any(|summary| summary.root.ends_with("/watched/.hidden-project")));
+        assert!(summaries
+            .iter()
+            .find(|summary| summary.root.ends_with("/watched/plain-project"))
+            .is_some_and(|summary| !summary.initialized && summary.active_branch.is_none()));
         Ok(())
     }
 }
