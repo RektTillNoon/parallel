@@ -313,7 +313,6 @@ export default function App() {
   const [rootsOpen, setRootsOpen] = useState(false);
   const [bridgeOpen, setBridgeOpen] = useState(true);
   const [agentDefaultsOpen, setAgentDefaultsOpen] = useState(true);
-  const [cliOpen, setCliOpen] = useState(false);
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [cliStatus, setCliStatus] = useState<CliInstallStatus | null>(null);
   const [agentStatuses, setAgentStatuses] = useState<AgentTargetStatus[] | null>(null);
@@ -738,7 +737,6 @@ export default function App() {
   const handleToggleRoots = useCallback(() => setRootsOpen((open) => !open), []);
   const handleToggleBridge = useCallback(() => setBridgeOpen((open) => !open), []);
   const handleToggleAgentDefaults = useCallback(() => setAgentDefaultsOpen((open) => !open), []);
-  const handleToggleCli = useCallback(() => setCliOpen((open) => !open), []);
   const handleWatchRootInputChange = useCallback((value: string) => setWatchRootInput(value), []);
   const handleProjectSelection = useCallback(
     (project: ProjectSummary) => {
@@ -892,8 +890,6 @@ export default function App() {
             agentStatuses={agentStatuses}
             agentPendingKind={agentPendingKind}
             onApplyAgentDefaults={(kind, action) => void handleApplyAgentDefaults(kind, action)}
-            cliOpen={cliOpen}
-            onToggleCli={handleToggleCli}
             cliStatus={cliStatus}
             cliPending={cliPending}
             onInstallCli={() => void handleInstallCli()}

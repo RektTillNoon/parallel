@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import SettingsModal from './SettingsModal';
 
 describe('SettingsModal', () => {
-  it('renders the agent defaults section instead of the old recopy warning', () => {
+  it('inlines the projectctl prerequisite into agent defaults instead of a separate CLI section', () => {
     const html = renderToStaticMarkup(
       <SettingsModal
         settingsOpen
@@ -44,9 +44,16 @@ describe('SettingsModal', () => {
         ]}
         agentPendingKind={null}
         onApplyAgentDefaults={() => {}}
-        cliOpen
-        onToggleCli={() => {}}
-        cliStatus={null}
+        cliStatus={{
+          bundledPath: '/Applications/parallel.app/Contents/MacOS/projectctl',
+          installPath: '/Users/light/bin/projectctl',
+          installed: false,
+          installDirOnPath: false,
+          shellProfileConfigured: false,
+          shellExport: 'export PATH="$HOME/bin:$PATH"',
+          shellProfile: '$HOME/.zshrc',
+          persistCommand: 'echo \'export PATH="$HOME/bin:$PATH"\' >> $HOME/.zshrc',
+        }}
         cliPending={false}
         onInstallCli={() => {}}
         onCopyCliSetup={() => {}}
@@ -54,6 +61,9 @@ describe('SettingsModal', () => {
     );
 
     expect(html).toContain('Agent Defaults');
+    expect(html).toContain('projectctl CLI');
+    expect(html).toContain('Install CLI');
+    expect(html).not.toContain('>CLI<');
     expect(html).not.toContain('Re-copy setup for: Codex');
   });
 });

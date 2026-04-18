@@ -37,8 +37,6 @@ type SettingsModalProps = {
   agentStatuses: AgentTargetStatus[] | null;
   agentPendingKind: string | null;
   onApplyAgentDefaults: (kind: string, action: AgentInstallAction) => void;
-  cliOpen: boolean;
-  onToggleCli: () => void;
   cliStatus: CliInstallStatus | null;
   cliPending: boolean;
   onInstallCli: () => void;
@@ -73,8 +71,6 @@ export default function SettingsModal({
   agentStatuses,
   agentPendingKind,
   onApplyAgentDefaults,
-  cliOpen,
-  onToggleCli,
   cliStatus,
   cliPending,
   onInstallCli,
@@ -228,6 +224,42 @@ export default function SettingsModal({
                 </p>
               </div>
             </div>
+            <div className="bridge-meta">
+              <div>
+                <label>projectctl CLI</label>
+                <strong className={`status status-${cliPresentation.tone}`}>{cliPresentation.label}</strong>
+              </div>
+              <div>
+                <label>Install path</label>
+                <code className="bridge-url">{cliStatus?.installPath ?? 'Checking…'}</code>
+              </div>
+              <div>
+                <label>Bundled binary</label>
+                <code className="bridge-url">{cliStatus?.bundledPath ?? 'Checking…'}</code>
+              </div>
+            </div>
+            {cliPresentation.detail ? (
+              <div className="bridge-warning">{cliPresentation.detail}</div>
+            ) : null}
+            {cliStatus && cliPresentation.needsShellSetup ? (
+              <div className="root-list cli-setup-list">
+                <div className="root-row">
+                  <code>{cliStatus.persistCommand}</code>
+                </div>
+              </div>
+            ) : null}
+            <div className="bridge-actions">
+              <button type="button" onClick={onInstallCli} disabled={cliPending}>
+                {cliPending ? 'Installing…' : cliStatus?.installed ? 'Reinstall CLI' : 'Install CLI'}
+              </button>
+              <button
+                type="button"
+                onClick={onCopyCliSetup}
+                disabled={!cliStatus || !cliPresentation.needsShellSetup}
+              >
+                Copy shell setup
+              </button>
+            </div>
             <div className="root-list">
               {(agentStatuses ?? []).map((status) => {
                 const presentation = describeAgentDefaultsStatus(status);
@@ -268,57 +300,6 @@ export default function SettingsModal({
                   </div>
                 );
               })}
-            </div>
-          </section>
-        </CollapsibleSection>
-        <CollapsibleSection
-          label="CLI"
-          open={cliOpen}
-          onToggle={onToggleCli}
-          className="settings-section"
-        >
-          <section className="bridge-panel">
-            <div className="panel-header">
-              <div>
-                <h3>projectctl CLI</h3>
-                <p className="muted settings-copy">Install a Terminal command that points at the bundled CLI.</p>
-              </div>
-            </div>
-            <div className="bridge-meta">
-              <div>
-                <label>Status</label>
-                <strong className={`status status-${cliPresentation.tone}`}>{cliPresentation.label}</strong>
-              </div>
-              <div>
-                <label>Install path</label>
-                <code className="bridge-url">{cliStatus?.installPath ?? 'Checking…'}</code>
-              </div>
-              <div>
-                <label>Bundled binary</label>
-                <code className="bridge-url">{cliStatus?.bundledPath ?? 'Checking…'}</code>
-              </div>
-            </div>
-            {cliPresentation.detail ? (
-              <div className="bridge-warning">{cliPresentation.detail}</div>
-            ) : null}
-            {cliStatus && cliPresentation.needsShellSetup ? (
-              <div className="root-list cli-setup-list">
-                <div className="root-row">
-                  <code>{cliStatus.persistCommand}</code>
-                </div>
-              </div>
-            ) : null}
-            <div className="bridge-actions">
-              <button type="button" onClick={onInstallCli} disabled={cliPending}>
-                {cliPending ? 'Installing…' : cliStatus?.installed ? 'Reinstall CLI' : 'Install CLI'}
-              </button>
-              <button
-                type="button"
-                onClick={onCopyCliSetup}
-                disabled={!cliStatus || !cliPresentation.needsShellSetup}
-              >
-                Copy shell setup
-              </button>
             </div>
           </section>
         </CollapsibleSection>
