@@ -1,7 +1,6 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    fs,
-    path::{Path, PathBuf},
+    collections::{HashMap, HashSet},
+    path::Path,
 };
 
 use anyhow::{anyhow, bail, Result};
@@ -9,17 +8,17 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::decisions::{build_accepted_decision_markdown, parse_accepted_decisions};
-use crate::discovery::discover_git_repos;
 use crate::handoff::{generate_handoff, HandoffInput};
 use crate::index_store::IndexStore;
 use crate::models::{
-    AcceptedDecision, ActivityEvent, ActivitySource, AppendActivityInput, BoardProjectDetail,
-    BoardStepDetail, DecisionProposal, DecisionProposalInput, DecisionProposalStatus,
-    DecisionProposalsFile, EnsureSessionInput, InitProjectInput, Manifest, MutationActor, Phase,
-    Plan, PlanSyncPhaseInput, ProjectDetail, ProjectIndexRecord, ProjectSummary,
-    RuntimePatchInput, RuntimeState, SessionContextInput, SessionStatus, SessionsFile, Step,
-    StepStatus, Subtask, SubtaskStatus, SyncPlanInput, WorkflowSession,
+    AcceptedDecision, ActivityEvent, ActivitySource, AppendActivityInput, DecisionProposal,
+    DecisionProposalInput, DecisionProposalStatus, DecisionProposalsFile, EnsureSessionInput,
+    InitProjectInput, Manifest, MutationActor, Phase, Plan, PlanSyncPhaseInput, ProjectDetail,
+    ProjectIndexRecord, ProjectSummary, RuntimePatchInput, RuntimeState, SessionContextInput,
+    SessionStatus, SessionsFile, Step, StepStatus, Subtask, SubtaskStatus, SyncPlanInput,
+    WorkflowSession,
 };
+use crate::root_paths::{canonicalize_root, normalize_roots, root_belongs_to_watched_root};
 use crate::storage_yaml::{
     append_json_line, ensure_dir, get_workflow_paths, now_iso, path_exists, read_git_branch,
     read_json_lines, read_text_if_exists, read_yaml_file, slugify, with_project_lock,
@@ -72,7 +71,7 @@ fn get_all_steps(plan: &Plan) -> Vec<&Step> {
     plan.phases.iter().flat_map(|phase| phase.steps.iter()).collect()
 }
 
-fn get_plan_progress(plan: &Plan) -> (i64, i64) {
+pub(crate) fn get_plan_progress(plan: &Plan) -> (i64, i64) {
     let steps = get_all_steps(plan);
     let total = steps.len() as i64;
     let completed = steps
@@ -216,7 +215,7 @@ fn ensure_gitignore_entry(root: &str) -> Result<()> {
     write_text_atomic(gitignore_path, &format!("{next_body}{entry}\n"))
 }
 
-fn determine_project_stale(runtime: Option<&RuntimeState>, repo_exists: bool) -> bool {
+pub(crate) fn determine_project_stale(runtime: Option<&RuntimeState>, repo_exists: bool) -> bool {
     if !repo_exists {
         return true;
     }
@@ -243,7 +242,7 @@ fn human_override_allowed(source: ActivitySource) -> bool {
     matches!(source, ActivitySource::Human | ActivitySource::Desktop)
 }
 
-fn locate_step<'a>(plan: &'a Plan, step_id: &str) -> Option<(usize, usize, &'a Phase, &'a Step)> {
+pub(crate) fn locate_step<'a>(plan: &'a Plan, step_id: &str) -> Option<(usize, usize, &'a Phase, &'a Step)> {
     for (phase_index, phase) in plan.phases.iter().enumerate() {
         for (step_index, step) in phase.steps.iter().enumerate() {
             if step.id == step_id {
@@ -483,28 +482,39 @@ fn build_project_summary(root: &str) -> Result<ProjectSummary> {
     }
 }
 
-fn maybe_sync_index(summary: &ProjectSummary, watched_root: &str, index_db_path: Option<&str>) -> Result<()> {
-    let Some(index_db_path) = index_db_path else {
-        return Ok(());
-    };
-    let store = IndexStore::new(index_db_path.to_string())?;
-    store.sync_project(&ProjectIndexRecord {
-        summary: summary.clone(),
-        watched_root: watched_root.to_string(),
-    })
+fn resolve_project_watched_root(store: &IndexStore, root: &str, explicit_watched_root: Option<&str>) -> Result<String> {
+    if let Some(watched_root) = explicit_watched_root.filter(|value| !value.trim().is_empty()) {
+        return Ok(canonicalize_root(watched_root));
+    }
+
+    if let Some(watched_root) = store.project_watched_root(root)? {
+        return Ok(watched_root);
+    }
+
+    let root = canonicalize_root(root);
+    let mut candidates = store
+        .list_watched_roots()?
+        .into_iter()
+        .filter(|candidate| root_belongs_to_watched_root(&root, candidate))
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|candidate| candidate.len());
+    Ok(candidates.pop().unwrap_or(root))
 }
 
 pub fn refresh_project_index(root: &str, index_db_path: &str, watched_root: Option<&str>) -> Result<()> {
-    let summary = build_project_summary(root)?;
+    let root = canonicalize_root(root);
+    let summary = build_project_summary(&root)?;
     let store = IndexStore::new(index_db_path.to_string())?;
+    let watched_root = resolve_project_watched_root(&store, &root, watched_root)?;
     store.sync_project(&ProjectIndexRecord {
         summary,
-        watched_root: watched_root.unwrap_or(root).to_string(),
+        watched_root,
     })
 }
 
-fn refresh_handoff_file(root: &str, index_db_path: Option<&str>) -> Result<String> {
-    let detail = get_project(root)?;
+fn refresh_handoff_file(root: &str, index_db_path: &str) -> Result<String> {
+    let root = canonicalize_root(root);
+    let detail = get_project(&root)?;
     let handoff = generate_handoff(&HandoffInput {
         manifest: detail.manifest.clone(),
         plan: detail.plan.clone(),
@@ -513,10 +523,8 @@ fn refresh_handoff_file(root: &str, index_db_path: Option<&str>) -> Result<Strin
         activity: detail.recent_activity.clone(),
         proposals: detail.pending_proposals.clone(),
     });
-    write_text_atomic(get_workflow_paths(root).handoff_path, &handoff)?;
-    if let Some(index_db_path) = index_db_path {
-        refresh_project_index(root, index_db_path, None)?;
-    }
+    write_text_atomic(get_workflow_paths(&root).handoff_path, &handoff)?;
+    refresh_project_index(&root, index_db_path, None)?;
     Ok(handoff)
 }
 
@@ -827,17 +835,18 @@ struct MutateProjectResult {
     event_context: EventContext,
 }
 
-fn mutate_project<F>(root: &str, actor: &MutationActor, index_db_path: Option<&str>, mutate: F) -> Result<ProjectDetail>
+fn mutate_project<F>(root: &str, actor: &MutationActor, index_db_path: &str, mutate: F) -> Result<ProjectDetail>
 where
     F: FnOnce(MutateProjectState) -> Result<MutateProjectResult>,
 {
-    with_project_lock(root, || {
-        ensure_project_files(root, actor)?;
-        let manifest = read_manifest(root)?;
-        let plan = read_plan(root)?;
-        let runtime = read_runtime(root)?;
-        let sessions = read_sessions(root)?;
-        let proposals = read_pending_proposals(root)?;
+    let root = canonicalize_root(root);
+    with_project_lock(&root, || {
+        ensure_project_files(&root, actor)?;
+        let manifest = read_manifest(&root)?;
+        let plan = read_plan(&root)?;
+        let runtime = read_runtime(&root)?;
+        let sessions = read_sessions(&root)?;
+        let proposals = read_pending_proposals(&root)?;
 
         let result = mutate(MutateProjectState {
             plan,
@@ -847,20 +856,20 @@ where
         })?;
 
         if let Some(plan) = &result.write_plan {
-            write_yaml_atomic(get_workflow_paths(root).plan_path, plan)?;
+            write_yaml_atomic(get_workflow_paths(&root).plan_path, plan)?;
         }
         if let Some(runtime) = &result.write_runtime {
-            write_yaml_atomic(get_workflow_paths(root).runtime_path, runtime)?;
+            write_yaml_atomic(get_workflow_paths(&root).runtime_path, runtime)?;
         }
         if let Some(sessions) = &result.write_sessions {
-            write_yaml_atomic(get_workflow_paths(root).sessions_path, sessions)?;
+            write_yaml_atomic(get_workflow_paths(&root).sessions_path, sessions)?;
         }
         if let Some(proposals) = &result.write_proposals {
-            write_yaml_atomic(get_workflow_paths(root).proposed_decisions_path, proposals)?;
+            write_yaml_atomic(get_workflow_paths(&root).proposed_decisions_path, proposals)?;
         }
 
         append_activity(
-            root,
+            &root,
             &ActivityEvent {
                 timestamp: now_iso(),
                 actor: actor.actor.clone(),
@@ -875,18 +884,19 @@ where
             },
         )?;
 
-        refresh_handoff_file(root, index_db_path)?;
-        get_project(root)
+        refresh_handoff_file(&root, index_db_path)?;
+        get_project(&root)
     })
 }
 
 pub fn init_project(input: InitProjectInput) -> Result<ProjectDetail> {
-    with_project_lock(&input.root, || {
+    let root = canonicalize_root(&input.root);
+    with_project_lock(&root, || {
         let timestamp = now_iso();
-        let paths = get_workflow_paths(&input.root);
-        let manifest = create_default_manifest(&input.root, &input, &timestamp);
+        let paths = get_workflow_paths(&root);
+        let manifest = create_default_manifest(&root, &input, &timestamp);
         let plan = create_default_plan();
-        let runtime = create_default_runtime(&plan, read_git_branch(&input.root)?, &timestamp);
+        let runtime = create_default_runtime(&plan, read_git_branch(&root)?, &timestamp);
         let sessions = blank_sessions_file();
 
         ensure_dir(&paths.local_dir)?;
@@ -904,7 +914,7 @@ pub fn init_project(input: InitProjectInput) -> Result<ProjectDetail> {
         )?;
         write_text_atomic(&paths.activity_path, "")?;
         append_activity(
-            &input.root,
+            &root,
             &ActivityEvent {
                 timestamp: timestamp.clone(),
                 actor: input.actor.clone(),
@@ -918,33 +928,32 @@ pub fn init_project(input: InitProjectInput) -> Result<ProjectDetail> {
                 payload: json!({}),
             },
         )?;
-        ensure_gitignore_entry(&input.root)?;
+        ensure_gitignore_entry(&root)?;
         let handoff = generate_handoff(&HandoffInput {
             manifest: manifest.clone(),
             plan: plan.clone(),
             runtime: runtime.clone(),
             sessions: sessions.sessions.clone(),
-            activity: read_activity(&input.root)?,
+            activity: read_activity(&root)?,
             proposals: Vec::new(),
         });
         write_text_atomic(&paths.handoff_path, &handoff)?;
-        if let Some(index_db_path) = &input.index_db_path {
-            refresh_project_index(&input.root, index_db_path, Some(&input.root))?;
-        }
-        get_project(&input.root)
+        refresh_project_index(&root, &input.index_db_path, Some(&root))?;
+        get_project(&root)
     })
 }
 
 pub fn get_project(root: &str) -> Result<ProjectDetail> {
-    let paths = get_workflow_paths(root);
+    let root = canonicalize_root(root);
+    let paths = get_workflow_paths(&root);
     let manifest = read_yaml_file(&paths.manifest_path)?;
-    let plan = read_plan(root)?;
+    let plan = read_plan(&root)?;
     let runtime: RuntimeState = read_yaml_file(&paths.runtime_path)?;
-    let sessions = read_sessions(root)?;
-    let activity = read_activity(root)?;
+    let sessions = read_sessions(&root)?;
+    let activity = read_activity(&root)?;
     let proposal_file = read_yaml_file::<DecisionProposalsFile>(&paths.proposed_decisions_path)?;
     let handoff = read_text_if_exists(&paths.handoff_path)?.unwrap_or_default();
-    let decisions_markdown = read_decisions_markdown(root)?;
+    let decisions_markdown = read_decisions_markdown(&root)?;
 
     Ok(ProjectDetail {
         manifest,
@@ -963,118 +972,25 @@ pub fn get_project(root: &str) -> Result<ProjectDetail> {
     })
 }
 
-fn activity_sort_key(timestamp: &str) -> i64 {
-    chrono::DateTime::parse_from_rfc3339(timestamp)
-        .map(|value| value.timestamp_millis())
-        .unwrap_or(i64::MIN)
-}
-
-pub fn get_board_project_detail(root: &str) -> Result<BoardProjectDetail> {
-    let plan = read_plan(root)?;
-    let runtime = read_runtime(root)?;
-    let sessions = read_sessions(root)?
-        .sessions
-        .into_iter()
-        .filter(|session| session.status == SessionStatus::Active)
-        .collect::<Vec<_>>();
-    let mut recent_activity = read_activity(root)?;
-    recent_activity.sort_by(|left, right| {
-        activity_sort_key(&right.timestamp).cmp(&activity_sort_key(&left.timestamp))
-    });
-    recent_activity.truncate(5);
-
-    let mut active_step_lookup = BTreeMap::new();
-    for session in &sessions {
-        let Some(step_id) = session.owned_step_id.as_deref() else {
-            continue;
-        };
-        let Some((_, _, _, step)) = locate_step(&plan, step_id) else {
-            continue;
-        };
-        active_step_lookup.entry(step.id.clone()).or_insert(BoardStepDetail {
-            title: step.title.clone(),
-            summary: step.summary.clone(),
-        });
-    }
-    if let Some(step_id) = runtime.current_step_id.as_deref() {
-        if let Some((_, _, _, step)) = locate_step(&plan, step_id) {
-            active_step_lookup.entry(step.id.clone()).or_insert(BoardStepDetail {
-                title: step.title.clone(),
-                summary: step.summary.clone(),
-            });
-        }
-    }
-
-    Ok(BoardProjectDetail {
-        root: root.to_string(),
-        sessions,
-        runtime_next_action: runtime.next_action,
-        blockers: runtime.blockers,
-        recent_activity,
-        active_step_lookup,
-    })
-}
-
-fn refreshed_indexed_summary(record: ProjectIndexRecord) -> Result<ProjectSummary> {
-    if path_exists(&record.summary.root) {
-        return build_project_summary(&record.summary.root);
-    }
-
-    let mut summary = record.summary;
-    summary.missing = true;
-    summary.stale = true;
-    Ok(summary)
-}
-
-pub fn list_projects(roots: &[String], index_db_path: Option<&str>) -> Result<Vec<ProjectSummary>> {
-    let discovered_roots = discover_git_repos(roots)?;
-    let mut summaries = Vec::new();
-
-    for repo_root in &discovered_roots {
-        let summary = build_project_summary(repo_root)?;
-        let watched_root = roots
-            .iter()
-            .find(|candidate| repo_root.starts_with(&fs::canonicalize(candidate).unwrap_or_else(|_| PathBuf::from(candidate)).to_string_lossy().to_string()))
-            .cloned()
-            .unwrap_or_else(|| repo_root.to_string());
-        maybe_sync_index(&summary, &watched_root, index_db_path)?;
-        summaries.push(summary);
-    }
-
-    if let Some(index_db_path) = index_db_path {
-        let store = IndexStore::new(index_db_path.to_string())?;
-        store.mark_missing_projects(roots, &discovered_roots)?;
-        let scanned_at = now_iso();
-        for watched_root in roots {
-            store.record_watched_root_scan(watched_root, &scanned_at)?;
-        }
-        return Ok(store
-            .list_projects(roots)?
-            .into_iter()
-            .map(|record| record.summary)
-            .collect());
-    }
-
-    Ok(summaries)
-}
-
-pub fn list_indexed_projects(roots: &[String], index_db_path: &str) -> Result<Vec<ProjectSummary>> {
-    let store = IndexStore::new(index_db_path.to_string())?;
-    store
-        .list_projects(roots)?
-        .into_iter()
-        .map(refreshed_indexed_summary)
-        .collect()
-}
-
 pub fn missing_watched_root_coverage(roots: &[String], index_db_path: &str) -> Result<Vec<String>> {
+    let roots = normalize_roots(roots.iter().cloned());
     let store = IndexStore::new(index_db_path.to_string())?;
-    store.missing_watched_root_coverage(roots)
+    store.missing_watched_root_coverage(&roots)
 }
 
 pub fn remove_watched_root_index_state(watched_root: &str, index_db_path: &str) -> Result<()> {
     let store = IndexStore::new(index_db_path.to_string())?;
-    store.remove_watched_root(watched_root)
+    store.remove_watched_root(&canonicalize_root(watched_root))
+}
+
+pub fn list_watched_roots(index_db_path: &str) -> Result<Vec<String>> {
+    let store = IndexStore::new(index_db_path.to_string())?;
+    store.list_watched_roots()
+}
+
+pub fn add_watched_root_index_state(watched_root: &str, index_db_path: &str) -> Result<()> {
+    let store = IndexStore::new(index_db_path.to_string())?;
+    store.add_watched_root(&canonicalize_root(watched_root), &now_iso())
 }
 
 pub fn ensure_session(input: EnsureSessionInput) -> Result<ProjectDetail> {
@@ -1087,7 +1003,7 @@ pub fn ensure_session(input: EnsureSessionInput) -> Result<ProjectDetail> {
         session_title: input.session_title.clone(),
         branch: input.branch.clone(),
     };
-    mutate_project(&input.root, &actor, input.index_db_path.as_deref(), |mut data| {
+    mutate_project(&input.root, &actor, &input.index_db_path, |mut data| {
         let now = now_iso();
         let branch = session_context
             .branch
@@ -1132,7 +1048,7 @@ pub fn sync_plan(input: SyncPlanInput) -> Result<ProjectDetail> {
         session_title: input.session_title.clone(),
         branch: input.branch.clone(),
     };
-    mutate_project(&input.root, &actor, input.index_db_path.as_deref(), |mut data| {
+    mutate_project(&input.root, &actor, &input.index_db_path, |mut data| {
         let now = now_iso();
         let branch = session_context
             .branch
@@ -1175,7 +1091,7 @@ pub fn start_step(
     step_id: &str,
     actor: MutationActor,
     context: SessionContextInput,
-    index_db_path: Option<&str>,
+    index_db_path: &str,
 ) -> Result<ProjectDetail> {
     mutate_project(root, &actor, index_db_path, |mut data| {
         let Some((phase_index, _step_index, _, current_step)) = locate_step(&data.plan, step_id) else {
@@ -1262,7 +1178,7 @@ pub fn complete_step(
     step_id: &str,
     actor: MutationActor,
     context: SessionContextInput,
-    index_db_path: Option<&str>,
+    index_db_path: &str,
 ) -> Result<ProjectDetail> {
     mutate_project(root, &actor, index_db_path, |mut data| {
         let current_title = locate_step(&data.plan, step_id)
@@ -1329,7 +1245,7 @@ pub fn add_blocker(
     blocker: &str,
     actor: MutationActor,
     context: SessionContextInput,
-    index_db_path: Option<&str>,
+    index_db_path: &str,
 ) -> Result<ProjectDetail> {
     mutate_project(root, &actor, index_db_path, |mut data| {
         let now = now_iso();
@@ -1386,7 +1302,7 @@ pub fn clear_blocker(
     blocker: Option<&str>,
     actor: MutationActor,
     context: SessionContextInput,
-    index_db_path: Option<&str>,
+    index_db_path: &str,
 ) -> Result<ProjectDetail> {
     mutate_project(root, &actor, index_db_path, |mut data| {
         let now = now_iso();
@@ -1458,7 +1374,7 @@ pub fn add_note(
     note: &str,
     actor: MutationActor,
     context: SessionContextInput,
-    index_db_path: Option<&str>,
+    index_db_path: &str,
 ) -> Result<ProjectDetail> {
     append_activity_event(
         root,
@@ -1473,9 +1389,8 @@ pub fn add_note(
             payload: None,
             step_id: None,
             subtask_id: None,
-            index_db_path: index_db_path.map(str::to_string),
+            index_db_path: index_db_path.to_string(),
         },
-        index_db_path,
     )
 }
 
@@ -1497,7 +1412,7 @@ pub fn update_runtime(input: RuntimePatchInput) -> Result<ProjectDetail> {
         actor: input.actor.clone(),
         source: input.source,
     };
-    mutate_project(&input.root, &actor, input.index_db_path.as_deref(), |mut data| {
+    mutate_project(&input.root, &actor, &input.index_db_path, |mut data| {
         let now = now_iso();
         let mut runtime_value = serde_json::to_value(&data.runtime)?;
         merge_runtime_patch(&mut runtime_value, &Value::Object(input.patch.clone()));
@@ -1536,13 +1451,12 @@ pub fn update_runtime(input: RuntimePatchInput) -> Result<ProjectDetail> {
 pub fn append_activity_event(
     root: &str,
     event: AppendActivityInput,
-    index_db_path: Option<&str>,
 ) -> Result<ProjectDetail> {
     let actor = MutationActor {
         actor: event.actor.clone(),
         source: event.source,
     };
-    mutate_project(root, &actor, index_db_path.or(event.index_db_path.as_deref()), |mut data| {
+    mutate_project(root, &actor, &event.index_db_path, |mut data| {
         let now = now_iso();
         let branch = if event.branch.is_some() {
             event.branch.clone()
@@ -1607,7 +1521,7 @@ pub fn propose_decision(
     proposal: DecisionProposalInput,
     actor: MutationActor,
     context: SessionContextInput,
-    index_db_path: Option<&str>,
+    index_db_path: &str,
 ) -> Result<ProjectDetail> {
     mutate_project(root, &actor, index_db_path, |mut data| {
         let now = now_iso();
@@ -1656,7 +1570,7 @@ pub fn propose_decision(
     })
 }
 
-pub fn accept_decision(root: &str, proposal_id: &str, actor: MutationActor, index_db_path: Option<&str>) -> Result<ProjectDetail> {
+pub fn accept_decision(root: &str, proposal_id: &str, actor: MutationActor, index_db_path: &str) -> Result<ProjectDetail> {
     with_project_lock(root, || {
         let manifest = read_manifest(root)?;
         let proposal_file = read_pending_proposals(root)?;
@@ -1715,7 +1629,7 @@ pub fn accept_decision(root: &str, proposal_id: &str, actor: MutationActor, inde
     })
 }
 
-pub fn refresh_handoff(root: &str, _actor: MutationActor, index_db_path: Option<&str>) -> Result<ProjectDetail> {
+pub fn refresh_handoff(root: &str, _actor: MutationActor, index_db_path: &str) -> Result<ProjectDetail> {
     with_project_lock(root, || {
         refresh_handoff_file(root, index_db_path)?;
         get_project(root)
@@ -1762,7 +1676,10 @@ fn validate_plan(plan: &Plan) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{get_board_project_detail, list_indexed_projects, list_projects, BoardStepDetail};
+    use crate::index_store::IndexStore;
     use crate::PlanSyncStepInput;
+    use std::fs;
     use tempfile::tempdir;
 
     fn create_real_repo(name: &str) -> Result<String> {
@@ -1785,7 +1702,7 @@ mod tests {
             kind: None,
             owner: None,
             tags: None,
-            index_db_path: Some(index_db),
+            index_db_path: index_db,
         })?;
         let workflow_dir = Path::new(&repo).join(".project-workflow");
         assert!(workflow_dir.join("manifest.yaml").exists());
@@ -1811,16 +1728,16 @@ mod tests {
             kind: None,
             owner: None,
             tags: None,
-            index_db_path: Some(index_db.clone()),
+            index_db_path: index_db.clone(),
         })?;
         let detail = get_project(&repo)?;
         let first_step_id = detail.plan.phases[0].steps[0].id.clone();
         let ctx = SessionContextInput::default();
-        start_step(&repo, &first_step_id, MutationActor { actor: "agent-1".to_string(), source: ActivitySource::Agent }, ctx.clone(), Some(&index_db))?;
-        add_blocker(&repo, "Need sign-off", MutationActor { actor: "agent-1".to_string(), source: ActivitySource::Agent }, ctx.clone(), Some(&index_db))?;
-        clear_blocker(&repo, Some("Need sign-off"), MutationActor { actor: "agent-1".to_string(), source: ActivitySource::Agent }, ctx.clone(), Some(&index_db))?;
-        add_note(&repo, "Captured initial requirements", MutationActor { actor: "agent-1".to_string(), source: ActivitySource::Agent }, ctx.clone(), Some(&index_db))?;
-        let completed = complete_step(&repo, &first_step_id, MutationActor { actor: "agent-1".to_string(), source: ActivitySource::Agent }, ctx, Some(&index_db))?;
+        start_step(&repo, &first_step_id, MutationActor { actor: "agent-1".to_string(), source: ActivitySource::Agent }, ctx.clone(), &index_db)?;
+        add_blocker(&repo, "Need sign-off", MutationActor { actor: "agent-1".to_string(), source: ActivitySource::Agent }, ctx.clone(), &index_db)?;
+        clear_blocker(&repo, Some("Need sign-off"), MutationActor { actor: "agent-1".to_string(), source: ActivitySource::Agent }, ctx.clone(), &index_db)?;
+        add_note(&repo, "Captured initial requirements", MutationActor { actor: "agent-1".to_string(), source: ActivitySource::Agent }, ctx.clone(), &index_db)?;
+        let completed = complete_step(&repo, &first_step_id, MutationActor { actor: "agent-1".to_string(), source: ActivitySource::Agent }, ctx, &index_db)?;
         assert_eq!(completed.plan.phases[0].steps[0].status, StepStatus::Done);
         Ok(())
     }
@@ -1837,7 +1754,7 @@ mod tests {
             kind: None,
             owner: None,
             tags: None,
-            index_db_path: Some(index_db.clone()),
+            index_db_path: index_db.clone(),
         })?;
         let first = sync_plan(SyncPlanInput {
             root: repo.clone(),
@@ -1858,7 +1775,7 @@ mod tests {
                     subtasks: None,
                 }],
             }],
-            index_db_path: Some(index_db.clone()),
+            index_db_path: index_db.clone(),
         })?;
         let step_id = first.plan.phases[0].steps[0].id.clone();
         let second = sync_plan(SyncPlanInput {
@@ -1880,7 +1797,7 @@ mod tests {
                     subtasks: None,
                 }],
             }],
-            index_db_path: Some(index_db),
+            index_db_path: index_db,
         })?;
         assert_eq!(second.plan.phases[0].steps[0].id, step_id);
         Ok(())
@@ -1905,13 +1822,14 @@ mod tests {
             kind: None,
             owner: None,
             tags: None,
-            index_db_path: Some(index_db.clone()),
+            index_db_path: index_db.clone(),
         })?;
 
         let roots = vec![watched_root.display().to_string()];
-        assert_eq!(missing_watched_root_coverage(&roots, &index_db)?, roots);
+        let canonical_roots = vec![fs::canonicalize(&watched_root)?.to_string_lossy().into_owned()];
+        assert_eq!(missing_watched_root_coverage(&roots, &index_db)?, canonical_roots);
 
-        let refreshed = list_projects(&roots, Some(&index_db))?;
+        let refreshed = list_projects(&roots, &index_db)?;
         assert_eq!(refreshed.len(), 1);
         assert!(missing_watched_root_coverage(&roots, &index_db)?.is_empty());
 
@@ -1923,7 +1841,7 @@ mod tests {
         assert_eq!(snapshot.len(), 1);
         assert!(snapshot[0].root.ends_with("/watched/repo-one"));
 
-        let refreshed_again = list_projects(&roots, Some(&index_db))?;
+        let refreshed_again = list_projects(&roots, &index_db)?;
         assert_eq!(refreshed_again.len(), 2);
         assert!(refreshed_again
             .iter()
@@ -1943,7 +1861,7 @@ mod tests {
             kind: None,
             owner: None,
             tags: None,
-            index_db_path: Some(index_db.clone()),
+            index_db_path: index_db.clone(),
         })?;
 
         let detail = get_project(&repo)?;
@@ -1956,7 +1874,7 @@ mod tests {
                 source: ActivitySource::Agent,
             },
             SessionContextInput::default(),
-            Some(&index_db),
+            &index_db,
         )?;
         add_blocker(
             &repo,
@@ -1966,7 +1884,7 @@ mod tests {
                 source: ActivitySource::Agent,
             },
             SessionContextInput::default(),
-            Some(&index_db),
+            &index_db,
         )?;
 
         let paths = get_workflow_paths(&repo);
@@ -2008,7 +1926,7 @@ mod tests {
         write_yaml_atomic(paths.sessions_path, &paused)?;
 
         let board = get_board_project_detail(&repo)?;
-        assert_eq!(board.root, repo);
+        assert_eq!(board.root, fs::canonicalize(&repo)?.to_string_lossy().into_owned());
         assert_eq!(board.sessions.len(), 1);
         assert_eq!(board.sessions[0].id, "active-session");
         assert_eq!(board.blockers, vec!["Need sign-off"]);
@@ -2031,6 +1949,52 @@ mod tests {
                 title: "Capture requirements".to_string(),
                 summary: "Write the initial problem statement and success criteria.".to_string(),
             })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mutation_refresh_preserves_parent_watched_root_membership() -> Result<()> {
+        let watched_root_dir = tempdir()?;
+        let watched_root = watched_root_dir.path().join("watched");
+        fs::create_dir_all(&watched_root)?;
+
+        let repo = watched_root.join("repo-one");
+        fs::create_dir_all(repo.join(".git"))?;
+        fs::write(repo.join(".git/HEAD"), "ref: refs/heads/main\n")?;
+
+        let index_db = watched_root.join(".app/index.sqlite").display().to_string();
+        init_project(InitProjectInput {
+            root: repo.display().to_string(),
+            actor: "tester".to_string(),
+            source: ActivitySource::Cli,
+            name: Some("Repo One".to_string()),
+            kind: None,
+            owner: None,
+            tags: None,
+            index_db_path: index_db.clone(),
+        })?;
+
+        let roots = vec![watched_root.display().to_string()];
+        assert_eq!(list_projects(&roots, &index_db)?.len(), 1);
+
+        add_note(
+            repo.display().to_string().as_str(),
+            "Preserve watched root ownership",
+            MutationActor {
+                actor: "tester".to_string(),
+                source: ActivitySource::Cli,
+            },
+            SessionContextInput::default(),
+            &index_db,
+        )?;
+
+        let store = IndexStore::new(index_db)?;
+        let canonical_repo = fs::canonicalize(&repo)?.to_string_lossy().into_owned();
+        let canonical_watched_root = fs::canonicalize(&watched_root)?.to_string_lossy().into_owned();
+        assert_eq!(
+            store.project_watched_root(&canonical_repo)?,
+            Some(canonical_watched_root)
         );
         Ok(())
     }

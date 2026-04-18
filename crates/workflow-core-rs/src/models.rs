@@ -297,7 +297,7 @@ pub struct InitProjectInput {
     pub kind: Option<String>,
     pub owner: Option<String>,
     pub tags: Option<Vec<String>>,
-    pub index_db_path: Option<String>,
+    pub index_db_path: String,
 }
 
 #[derive(Debug, Clone)]
@@ -308,7 +308,7 @@ pub struct EnsureSessionInput {
     pub session_id: Option<String>,
     pub session_title: Option<String>,
     pub branch: Option<String>,
-    pub index_db_path: Option<String>,
+    pub index_db_path: String,
 }
 
 #[derive(Debug, Clone)]
@@ -319,7 +319,7 @@ pub struct RuntimePatchInput {
     pub patch: Map<String, Value>,
     pub summary: String,
     pub event_type: Option<String>,
-    pub index_db_path: Option<String>,
+    pub index_db_path: String,
 }
 
 #[derive(Debug, Clone)]
@@ -334,7 +334,7 @@ pub struct AppendActivityInput {
     pub payload: Option<Value>,
     pub step_id: Option<String>,
     pub subtask_id: Option<String>,
-    pub index_db_path: Option<String>,
+    pub index_db_path: String,
 }
 
 #[derive(Debug, Clone)]
@@ -370,7 +370,7 @@ pub struct SyncPlanInput {
     pub session_title: Option<String>,
     pub branch: Option<String>,
     pub phases: Vec<PlanSyncPhaseInput>,
-    pub index_db_path: Option<String>,
+    pub index_db_path: String,
 }
 
 #[derive(Debug, Clone)]

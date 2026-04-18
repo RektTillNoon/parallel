@@ -1,7 +1,7 @@
 use std::{fs, path::Path};
 
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::models::{ProjectIndexRecord, ProjectSummary};
 
@@ -56,6 +56,11 @@ impl IndexStore {
             CREATE TABLE IF NOT EXISTS watched_root_scans (
               watched_root TEXT PRIMARY KEY,
               last_scanned_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS watched_roots (
+              root TEXT PRIMARY KEY,
+              added_at TEXT NOT NULL
             );
             "#,
         )?;
@@ -154,6 +159,79 @@ impl IndexStore {
         Ok(())
     }
 
+    pub fn add_watched_root(&self, watched_root: &str, added_at: &str) -> Result<()> {
+        let conn = self.connection()?;
+        conn.execute(
+            r#"
+            INSERT INTO watched_roots (root, added_at)
+            VALUES (?1, ?2)
+            ON CONFLICT(root) DO UPDATE SET
+              added_at = excluded.added_at
+            "#,
+            params![watched_root, added_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn sync_watched_roots(&self, watched_roots: &[String]) -> Result<()> {
+        let mut conn = self.connection()?;
+        let tx = conn.transaction()?;
+        for watched_root in watched_roots {
+            tx.execute(
+                r#"
+                INSERT INTO watched_roots (root, added_at)
+                VALUES (?1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                ON CONFLICT(root) DO NOTHING
+                "#,
+                params![watched_root],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn list_watched_roots(&self) -> Result<Vec<String>> {
+        let conn = self.connection()?;
+        let mut stmt = conn.prepare("SELECT root FROM watched_roots ORDER BY root COLLATE NOCASE")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut roots = Vec::new();
+        for row in rows {
+            roots.push(row?);
+        }
+        Ok(roots)
+    }
+
+    pub fn seed_watched_roots(&self) -> Result<Vec<String>> {
+        let conn = self.connection()?;
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT root FROM watched_roots
+            UNION
+            SELECT watched_root AS root FROM watched_root_scans
+            UNION
+            SELECT watched_root AS root FROM projects
+            ORDER BY root COLLATE NOCASE
+            "#,
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut roots = Vec::new();
+        for row in rows {
+            roots.push(row?);
+        }
+        Ok(roots)
+    }
+
+    pub fn project_watched_root(&self, root: &str) -> Result<Option<String>> {
+        let conn = self.connection()?;
+        conn.query_row(
+            "SELECT watched_root FROM projects WHERE root = ?1",
+            params![root],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
     pub fn missing_watched_root_coverage(&self, watched_roots: &[String]) -> Result<Vec<String>> {
         if watched_roots.is_empty() {
             return Ok(Vec::new());
@@ -192,6 +270,10 @@ impl IndexStore {
         )?;
         conn.execute(
             "DELETE FROM watched_root_scans WHERE watched_root = ?1",
+            params![watched_root],
+        )?;
+        conn.execute(
+            "DELETE FROM watched_roots WHERE root = ?1",
             params![watched_root],
         )?;
         Ok(())
@@ -248,5 +330,23 @@ impl IndexStore {
             out.push(row?);
         }
         Ok(out)
+    }
+
+    #[cfg(test)]
+    pub fn sync_project_root_seed(&self, watched_root: &str) -> Result<()> {
+        let conn = self.connection()?;
+        conn.execute(
+            r#"
+            INSERT INTO projects (
+              root, watched_root, id, name, kind, owner, tags_json, initialized, status, stale, missing,
+              current_step_id, current_step_title, blocker_count, total_step_count, completed_step_count,
+              active_session_count, focus_session_id, last_updated_at, next_action, active_branch,
+              pending_proposal_count, last_seen_at
+            ) VALUES (?1, ?2, NULL, 'seed', NULL, NULL, '[]', 0, 'uninitialized', 0, 0, NULL, NULL, 0, 0, 0, 0, NULL, NULL, NULL, NULL, 0, NULL)
+            ON CONFLICT(root) DO UPDATE SET watched_root = excluded.watched_root
+            "#,
+            params![watched_root, watched_root],
+        )?;
+        Ok(())
     }
 }

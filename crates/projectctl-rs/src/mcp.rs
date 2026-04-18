@@ -13,10 +13,11 @@ use axum::{
 };
 use parallel_workflow_core::{
     add_blocker, append_activity_event, clear_blocker, complete_step, ensure_session, get_project,
-    list_projects, propose_decision, refresh_handoff, start_step, sync_plan, update_runtime,
-    ActivitySource, AppendActivityInput, DecisionProposalInput, EnsureSessionInput,
-    MutationActor, PlanSyncPhaseInput, PlanSyncStepInput, PlanSyncSubtaskInput, RuntimePatchInput,
-    SessionContextInput, SyncPlanInput, SubtaskStatus,
+    list_projects, propose_decision, refresh_handoff, resolve_watched_roots, start_step,
+    sync_plan, update_runtime, ActivitySource, AppendActivityInput, DecisionProposalInput,
+    EnsureSessionInput, MutationActor, PlanSyncPhaseInput, PlanSyncStepInput,
+    PlanSyncSubtaskInput, RootResolutionSurface, RuntimePatchInput, SessionContextInput,
+    SyncPlanInput, SubtaskStatus,
 };
 use schemars::{schema_for, JsonSchema};
 use serde::{Deserialize, Serialize};
@@ -31,7 +32,7 @@ pub struct ServeHttpConfig {
     pub port: u16,
     pub token: String,
     pub watched_roots: Vec<String>,
-    pub index_db_path: Option<String>,
+    pub index_db_path: String,
 }
 
 #[derive(Clone)]
@@ -54,7 +55,7 @@ trait ToolBackend: Send + Sync {
 #[derive(Clone)]
 struct LocalBackend {
     watched_roots: Vec<String>,
-    index_db_path: Option<String>,
+    index_db_path: String,
 }
 
 #[derive(Clone)]
@@ -545,8 +546,20 @@ impl ToolBackend for LocalBackend {
         match name {
             "list_projects" => {
                 let args: ListProjectsArgs = serde_json::from_value(args)?;
-                let roots = args.roots.unwrap_or_else(|| self.watched_roots.clone());
-                Ok(serde_json::to_value(list_projects(&roots, self.index_db_path.as_deref())?)?)
+                let roots = resolve_watched_roots(
+                    RootResolutionSurface::Bridge,
+                    args.roots.as_deref().or_else(|| {
+                        if self.watched_roots.is_empty() {
+                            None
+                        } else {
+                            Some(self.watched_roots.as_slice())
+                        }
+                    }),
+                    None,
+                    &self.index_db_path,
+                    None,
+                )?;
+                Ok(serde_json::to_value(list_projects(&roots, &self.index_db_path)?)?)
             }
             "get_project" => {
                 let args: GetProjectArgs = serde_json::from_value(args)?;
@@ -607,7 +620,6 @@ impl ToolBackend for LocalBackend {
                         subtask_id: args.subtask_id,
                         index_db_path: self.index_db_path.clone(),
                     },
-                    self.index_db_path.as_deref(),
                 )?)?)
             }
             "start_step" => {
@@ -624,7 +636,7 @@ impl ToolBackend for LocalBackend {
                         session_title: args.session_title,
                         branch: args.branch,
                     },
-                    self.index_db_path.as_deref(),
+                    &self.index_db_path,
                 )?)?)
             }
             "complete_step" => {
@@ -641,7 +653,7 @@ impl ToolBackend for LocalBackend {
                         session_title: args.session_title,
                         branch: args.branch,
                     },
-                    self.index_db_path.as_deref(),
+                    &self.index_db_path,
                 )?)?)
             }
             "set_blocker" => {
@@ -661,7 +673,7 @@ impl ToolBackend for LocalBackend {
                         args.blocker.as_deref(),
                         actor,
                         context,
-                        self.index_db_path.as_deref(),
+                        &self.index_db_path,
                     )?
                 } else {
                     let blocker = args
@@ -669,7 +681,7 @@ impl ToolBackend for LocalBackend {
                         .as_deref()
                         .filter(|value| !value.trim().is_empty())
                         .ok_or_else(|| anyhow!("blocker is required when clear=false"))?;
-                    add_blocker(&args.root, blocker, actor, context, self.index_db_path.as_deref())?
+                    add_blocker(&args.root, blocker, actor, context, &self.index_db_path)?
                 };
                 Ok(serde_json::to_value(result)?)
             }
@@ -681,7 +693,7 @@ impl ToolBackend for LocalBackend {
                         actor: args.actor,
                         source: parse_source(&args.source),
                     },
-                    self.index_db_path.as_deref(),
+                    &self.index_db_path,
                 )?)?)
             }
             "propose_decision" => {
@@ -703,7 +715,7 @@ impl ToolBackend for LocalBackend {
                         session_title: args.session_title,
                         branch: None,
                     },
-                    self.index_db_path.as_deref(),
+                    &self.index_db_path,
                 )?)?)
             }
             _ => bail!("unknown tool: {name}"),
@@ -886,6 +898,11 @@ mod tests {
     use parallel_workflow_core::InitProjectInput;
     use std::{fs, net::TcpListener, time::Duration};
 
+    fn create_index_db() -> Result<String> {
+        let dir = tempfile::tempdir()?;
+        Ok(dir.keep().join("workflow-index.sqlite").display().to_string())
+    }
+
     fn create_repo() -> Result<String> {
         let dir = tempfile::tempdir()?;
         let root = dir.keep().join("bridge-project");
@@ -905,11 +922,12 @@ mod tests {
 
     #[tokio::test]
     async fn health_requires_valid_bearer_token() -> Result<()> {
+        let index_db = create_index_db()?;
         let (port, handle) = spawn_server(ServeHttpConfig {
             port: 0,
             token: "secret".to_string(),
             watched_roots: Vec::new(),
-            index_db_path: None,
+            index_db_path: index_db,
         })
         .await?;
 
@@ -933,11 +951,12 @@ mod tests {
 
     #[tokio::test]
     async fn tools_list_contains_existing_surface() -> Result<()> {
+        let index_db = create_index_db()?;
         let (port, handle) = spawn_server(ServeHttpConfig {
             port: 0,
             token: "secret".to_string(),
             watched_roots: Vec::new(),
-            index_db_path: None,
+            index_db_path: index_db,
         })
         .await?;
 
@@ -982,14 +1001,14 @@ mod tests {
             kind: Some("software".to_string()),
             owner: Some("tester".to_string()),
             tags: Some(Vec::new()),
-            index_db_path: Some(index_db.clone()),
+            index_db_path: index_db.clone(),
         })?;
 
         let (port, handle) = spawn_server(ServeHttpConfig {
             port: 0,
             token: "secret".to_string(),
             watched_roots: vec![repo.clone()],
-            index_db_path: Some(index_db),
+            index_db_path: index_db,
         })
         .await?;
 

@@ -154,6 +154,30 @@ describe('resolveSelectionState', () => {
     expect(result.selectedRoot).toBe('/Users/light/Projects/parallel');
     expect(result.selectedProject?.root).toBe('/Users/light/Projects/parallel');
   });
+
+  it('falls back when the last focused repo is no longer loaded', () => {
+    const state = {
+      ...baseState,
+      settings: {
+        ...baseState.settings,
+        lastFocusedProject: '/Users/light/Projects/missing',
+      },
+      projects: [
+        {
+          ...baseState.projects[0],
+          root: '/Users/light/Projects/parallel',
+          name: 'parallel',
+          initialized: true,
+          status: 'todo',
+        },
+      ],
+    } satisfies LoadStatePayload;
+
+    const result = resolveSelectionState(state);
+
+    expect(result.selectedRoot).toBe('/Users/light/Projects/parallel');
+    expect(result.selectedProject?.root).toBe('/Users/light/Projects/parallel');
+  });
 });
 
 describe('bridge status helpers', () => {

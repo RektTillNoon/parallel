@@ -6,8 +6,8 @@ use anyhow::{anyhow, bail, Result};
 use parallel_workflow_core::{
     accept_decision, add_blocker, add_note, append_activity_event, clear_blocker, complete_step,
     canonical_index_db_path, ensure_session, get_project, init_project, list_projects,
-    propose_decision, refresh_handoff, start_step, sync_plan, update_runtime, ActivitySource,
-    AppendActivityInput,
+    propose_decision, refresh_handoff, resolve_index_db_path, resolve_watched_roots, start_step,
+    sync_plan, update_runtime, ActivitySource, AppendActivityInput, RootResolutionSurface,
     DecisionProposalInput, EnsureSessionInput, InitProjectInput, MutationActor, PlanSyncPhaseInput,
     PlanSyncStepInput, PlanSyncSubtaskInput, RuntimePatchInput, SessionContextInput, SyncPlanInput,
 };
@@ -95,55 +95,36 @@ fn resolve_root(parsed: &ParsedArgs) -> String {
     root.canonicalize().unwrap_or(root).to_string_lossy().into_owned()
 }
 
-fn resolve_index_db_from_sources(
-    flag_index_db: Option<String>,
-    env_index_db: Option<String>,
-    canonical_default: Option<String>,
-) -> Option<String> {
-    flag_index_db.or(env_index_db).or(canonical_default)
-}
-
-fn resolve_index_db(parsed: &ParsedArgs) -> Option<String> {
-    resolve_index_db_from_sources(
-        flag(parsed, "index-db"),
-        env::var("PROJECT_WORKFLOW_INDEX_DB").ok(),
-        canonical_index_db_path().map(|path| path.to_string_lossy().into_owned()),
+fn resolve_index_db(parsed: &ParsedArgs) -> Result<String> {
+    resolve_index_db_path(
+        flag(parsed, "index-db").as_deref(),
+        env::var("PROJECT_WORKFLOW_INDEX_DB").ok().as_deref(),
     )
 }
 
-fn resolve_roots(parsed: &ParsedArgs) -> Vec<String> {
-    if parsed.positionals.len() > 1 {
-        return parsed.positionals[1..]
-            .iter()
-            .map(|root| {
-                let path = PathBuf::from(root);
-                path.canonicalize().unwrap_or(path).to_string_lossy().into_owned()
-            })
-            .collect();
-    }
-    if let Ok(env_roots) = env::var("PROJECT_WORKFLOW_WATCH_ROOTS") {
-        return env_roots
-            .split(if cfg!(windows) { ';' } else { ':' })
-            .map(str::trim)
-            .filter(|root| !root.is_empty())
-            .map(|root| {
-                let path = PathBuf::from(root);
-                path.canonicalize().unwrap_or(path).to_string_lossy().into_owned()
-            })
-            .collect();
-    }
-    vec![env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .to_string_lossy()
-        .into_owned()]
+fn resolve_roots(parsed: &ParsedArgs, index_db_path: &str) -> Result<Vec<String>> {
+    let explicit_roots = if parsed.positionals.len() > 1 {
+        Some(
+            parsed.positionals[1..]
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        None
+    };
+    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    resolve_watched_roots(
+        RootResolutionSurface::Cli,
+        explicit_roots.as_deref(),
+        env::var("PROJECT_WORKFLOW_WATCH_ROOTS").ok().as_deref(),
+        index_db_path,
+        Some(cwd.to_string_lossy().as_ref()),
+    )
 }
 
-fn print_result(value: &impl serde::Serialize, json: bool) -> Result<()> {
-    if json {
-        println!("{}", serde_json::to_string_pretty(value)?);
-    } else {
-        println!("{}", serde_json::to_string_pretty(value)?);
-    }
+fn print_result(value: &impl serde::Serialize) -> Result<()> {
+    println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
 }
 
@@ -267,10 +248,9 @@ fn run() -> Result<()> {
     let parsed = parse_args(&argv);
     let command = parsed.positionals.get(0).cloned();
     let subcommand = parsed.positionals.get(1).cloned();
-    let json = parsed.booleans.contains("json");
     let actor = resolve_actor(&parsed);
     let session_context = resolve_session_context(&parsed);
-    let index_db_path = resolve_index_db(&parsed);
+    let index_db_path = resolve_index_db(&parsed)?;
 
     match command.as_deref() {
         Some("mcp") => match subcommand.as_deref() {
@@ -324,24 +304,24 @@ fn run() -> Result<()> {
                 tags: flag(&parsed, "tags").map(|tags| tags.split(',').map(|tag| tag.trim().to_string()).filter(|tag| !tag.is_empty()).collect()),
                 index_db_path,
             })?;
-            print_result(&project, json)
+            print_result(&project)
         }
         Some("list") => {
-            let projects = list_projects(&resolve_roots(&parsed), index_db_path.as_deref())?;
-            print_result(&projects, json)
+            let projects = list_projects(&resolve_roots(&parsed, &index_db_path)?, &index_db_path)?;
+            print_result(&projects)
         }
         Some("show") => {
             let project = get_project(&resolve_root(&parsed))?;
-            print_result(&project, json)
+            print_result(&project)
         }
         Some("step") => {
             let step_id = parsed.positionals.get(2).cloned().ok_or_else(|| anyhow!("Missing step id"))?;
             let result = if subcommand.as_deref() == Some("start") {
-                start_step(&resolve_root(&parsed), &step_id, actor, session_context, index_db_path.as_deref())?
+                start_step(&resolve_root(&parsed), &step_id, actor, session_context, &index_db_path)?
             } else {
-                complete_step(&resolve_root(&parsed), &step_id, actor, session_context, index_db_path.as_deref())?
+                complete_step(&resolve_root(&parsed), &step_id, actor, session_context, &index_db_path)?
             };
-            print_result(&result, json)
+            print_result(&result)
         }
         Some("blocker") => {
             let summary = if parsed.positionals.len() > 2 {
@@ -353,17 +333,17 @@ fn run() -> Result<()> {
                 if summary.trim().is_empty() {
                     bail!("Missing blocker summary");
                 }
-                add_blocker(&resolve_root(&parsed), &summary, actor, session_context, index_db_path.as_deref())?
+                add_blocker(&resolve_root(&parsed), &summary, actor, session_context, &index_db_path)?
             } else {
                 clear_blocker(
                     &resolve_root(&parsed),
                     if summary.trim().is_empty() { None } else { Some(summary.as_str()) },
                     actor,
                     session_context,
-                    index_db_path.as_deref(),
+                    &index_db_path,
                 )?
             };
-            print_result(&result, json)
+            print_result(&result)
         }
         Some("note") => {
             let summary = if parsed.positionals.len() > 2 {
@@ -374,8 +354,8 @@ fn run() -> Result<()> {
             if summary.trim().is_empty() {
                 bail!("Missing note summary");
             }
-            let result = add_note(&resolve_root(&parsed), &summary, actor, session_context, index_db_path.as_deref())?;
-            print_result(&result, json)
+            let result = add_note(&resolve_root(&parsed), &summary, actor, session_context, &index_db_path)?;
+            print_result(&result)
         }
         Some("session") => {
             if subcommand.as_deref() != Some("ensure") {
@@ -390,7 +370,7 @@ fn run() -> Result<()> {
                 branch: session_context.branch,
                 index_db_path,
             })?;
-            print_result(&result, json)
+            print_result(&result)
         }
         Some("plan") => {
             if subcommand.as_deref() != Some("sync") {
@@ -409,7 +389,7 @@ fn run() -> Result<()> {
                 phases,
                 index_db_path,
             })?;
-            print_result(&result, json)
+            print_result(&result)
         }
         Some("activity") => {
             if subcommand.as_deref() != Some("add") {
@@ -442,13 +422,12 @@ fn run() -> Result<()> {
                     subtask_id: flag(&parsed, "subtask-id"),
                     index_db_path: index_db_path.clone(),
                 },
-                index_db_path.as_deref(),
             )?;
-            print_result(&result, json)
+            print_result(&result)
         }
         Some("handoff") => {
-            let result = refresh_handoff(&resolve_root(&parsed), actor, index_db_path.as_deref())?;
-            print_result(&result, json)
+            let result = refresh_handoff(&resolve_root(&parsed), actor, &index_db_path)?;
+            print_result(&result)
         }
         Some("decision") => {
             if subcommand.as_deref() == Some("propose") {
@@ -462,15 +441,15 @@ fn run() -> Result<()> {
                     },
                     actor,
                     session_context,
-                    index_db_path.as_deref(),
+                    &index_db_path,
                 )?;
-                return print_result(&result, json);
+                return print_result(&result);
             }
             if subcommand.as_deref() == Some("accept") {
                 ensure_human_authority(&parsed)?;
                 let proposal_id = parsed.positionals.get(2).cloned().or_else(|| flag(&parsed, "proposal-id")).ok_or_else(|| anyhow!("Missing proposal id"))?;
-                let result = accept_decision(&resolve_root(&parsed), &proposal_id, actor, index_db_path.as_deref())?;
-                return print_result(&result, json);
+                let result = accept_decision(&resolve_root(&parsed), &proposal_id, actor, &index_db_path)?;
+                return print_result(&result);
             }
             bail!("Unknown decision subcommand \"{}\"", subcommand.unwrap_or_default());
         }
@@ -490,10 +469,10 @@ fn run() -> Result<()> {
                 event_type: flag(&parsed, "event-type"),
                 index_db_path,
             })?;
-            print_result(&result, json)
+            print_result(&result)
         }
         _ => {
-            print_result(&help_payload(), true)?;
+            print_result(&help_payload())?;
             process::exit(if command.is_some() { 1 } else { 0 });
         }
     }
@@ -506,30 +485,26 @@ mod tests {
     #[test]
     fn resolve_index_db_prefers_flag_then_env_then_canonical_default() {
         assert_eq!(
-            resolve_index_db_from_sources(
-                Some("/tmp/from-flag.sqlite".to_string()),
-                Some("/tmp/from-env.sqlite".to_string()),
-                Some("/tmp/from-default.sqlite".to_string()),
-            ),
-            Some("/tmp/from-flag.sqlite".to_string())
+            resolve_index_db_path(
+                Some("/tmp/from-flag.sqlite"),
+                Some("/tmp/from-env.sqlite"),
+            )
+            .expect("flag path should resolve"),
+            "/tmp/from-flag.sqlite".to_string()
         );
 
         assert_eq!(
-            resolve_index_db_from_sources(
-                None,
-                Some("/tmp/from-env.sqlite".to_string()),
-                Some("/tmp/from-default.sqlite".to_string()),
-            ),
-            Some("/tmp/from-env.sqlite".to_string())
+            resolve_index_db_path(None, Some("/tmp/from-env.sqlite"))
+                .expect("env path should resolve"),
+            "/tmp/from-env.sqlite".to_string()
         );
 
         assert_eq!(
-            resolve_index_db_from_sources(
-                None,
-                None,
-                Some("/tmp/from-default.sqlite".to_string()),
-            ),
-            Some("/tmp/from-default.sqlite".to_string())
+            resolve_index_db_path(None, None).expect("default path should resolve"),
+            canonical_index_db_path()
+                .expect("canonical default should exist")
+                .to_string_lossy()
+                .into_owned()
         );
     }
 

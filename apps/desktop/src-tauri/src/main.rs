@@ -3,6 +3,7 @@
 mod bridge;
 
 use std::{
+    collections::HashMap,
     env, fs,
     path::{Path, PathBuf},
     sync::mpsc,
@@ -18,11 +19,12 @@ use bridge::{
 };
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use parallel_workflow_core::{
-    add_blocker, add_note, clear_blocker, complete_step, get_board_project_detail,
-    get_project as get_project_service, init_project as init_project_service, list_indexed_projects,
-    list_projects, missing_watched_root_coverage, propose_decision,
-    remove_watched_root_index_state, start_step, ActivitySource, BoardProjectDetail,
-    DecisionProposalInput, InitProjectInput, MutationActor, ProjectSummary, SessionContextInput,
+    add_blocker, add_note, add_watched_root_index_state, clear_blocker, complete_step,
+    get_board_project_detail, get_project as get_project_service,
+    init_project as init_project_service, list_indexed_projects, list_projects,
+    missing_watched_root_coverage, propose_decision, remove_watched_root_index_state,
+    resolve_watched_roots, start_step, ActivitySource, BoardProjectDetail, DecisionProposalInput,
+    InitProjectInput, MutationActor, ProjectSummary, RootResolutionSurface, SessionContextInput,
     canonical_index_db_path, CANONICAL_INDEX_DB_FILE,
 };
 use serde::{Deserialize, Serialize};
@@ -39,7 +41,16 @@ use tauri_plugin_shell::{
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct Settings {
+    #[serde(default)]
     watched_roots: Vec<String>,
+    last_focused_project: Option<String>,
+    #[serde(default)]
+    mcp: BridgeSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct PersistedSettings {
     last_focused_project: Option<String>,
     #[serde(default)]
     mcp: BridgeSettings,
@@ -66,6 +77,7 @@ struct AppState {
     settings_path: PathBuf,
     index_db_path: PathBuf,
     watcher: Mutex<Option<RecommendedWatcher>>,
+    local_write_suppression: Mutex<HashMap<String, std::time::Instant>>,
     tray_handles: Mutex<Option<TrayMenuHandles>>,
     bridge: Mutex<BridgeSupervisor>,
 }
@@ -79,6 +91,9 @@ struct BridgeSupervisor {
 
 const DESKTOP_ACTOR_ID: &str = "desktop-user";
 const DEFAULT_PROJECT_KIND: &str = "software";
+const WORKFLOW_TOPOLOGY_EVENT: &str = "workflow://topology-changed";
+const WORKFLOW_SNAPSHOT_EVENT: &str = "workflow://snapshot-changed";
+const LOCAL_WRITE_SUPPRESSION_WINDOW_MS: u64 = 1500;
 
 fn app_support_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path().app_data_dir().map_err(|error| error.to_string())
@@ -117,16 +132,41 @@ fn ensure_settings(state: &AppState) -> Result<Settings, String> {
         if let Some(parent) = state.settings_path.parent() {
             fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
-        let initial = serde_json::to_string_pretty(&Settings::default()).map_err(|error| error.to_string())?;
+        let initial = serde_json::to_string_pretty(&PersistedSettings::default()).map_err(|error| error.to_string())?;
         fs::write(&state.settings_path, initial).map_err(|error| error.to_string())?;
     }
 
     let raw = fs::read_to_string(&state.settings_path).map_err(|error| error.to_string())?;
-    serde_json::from_str(&raw).map_err(|error| error.to_string())
+    let persisted: PersistedSettings = serde_json::from_str(&raw).map_err(|error| error.to_string())?;
+    let watched_roots = resolve_desktop_watched_roots(
+        state,
+        env::var("PROJECT_WORKFLOW_WATCH_ROOTS").ok().as_deref(),
+    )?;
+    Ok(Settings {
+        watched_roots,
+        last_focused_project: persisted.last_focused_project,
+        mcp: persisted.mcp,
+    })
+}
+
+fn resolve_desktop_watched_roots(state: &AppState, env_roots: Option<&str>) -> Result<Vec<String>, String> {
+    let index_db_path = state.index_db_path.to_string_lossy().into_owned();
+    resolve_watched_roots(
+        RootResolutionSurface::Desktop,
+        None,
+        env_roots,
+        index_db_path.as_str(),
+        None,
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn save_settings(state: &AppState, settings: &Settings) -> Result<(), String> {
-    let body = serde_json::to_string_pretty(settings).map_err(|error| error.to_string())?;
+    let body = serde_json::to_string_pretty(&PersistedSettings {
+        last_focused_project: settings.last_focused_project.clone(),
+        mcp: settings.mcp.clone(),
+    })
+    .map_err(|error| error.to_string())?;
     fs::write(&state.settings_path, body).map_err(|error| error.to_string())
 }
 
@@ -158,6 +198,14 @@ fn to_json_string<T: Serialize>(value: &T) -> Result<String, String> {
     serde_json::to_string(value).map_err(|error| error.to_string())
 }
 
+fn canonicalize_path_string(raw: &str) -> String {
+    PathBuf::from(raw)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(raw))
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn desktop_actor() -> MutationActor {
     MutationActor {
         actor: DESKTOP_ACTOR_ID.to_string(),
@@ -177,10 +225,6 @@ fn now_iso() -> String {
         .unwrap_or_default()
         .as_secs();
     format!("{seconds}")
-}
-
-fn joined_watched_roots(settings: &Settings) -> String {
-    settings.watched_roots.join(if cfg!(windows) { ";" } else { ":" })
 }
 
 fn emit_bridge_state(app: &AppHandle, state: &AppState, reason: &str) -> Result<(), String> {
@@ -396,8 +440,7 @@ fn start_bridge(app: &AppHandle, state: &AppState) -> Result<(), String> {
             "--token".to_string(),
             settings.mcp.token.clone(),
         ])
-        .env("PROJECT_WORKFLOW_INDEX_DB", state.index_db_path.to_string_lossy().into_owned())
-        .env("PROJECT_WORKFLOW_WATCH_ROOTS", joined_watched_roots(&settings));
+        .env("PROJECT_WORKFLOW_INDEX_DB", state.index_db_path.to_string_lossy().into_owned());
 
     let (mut rx, child) = sidecar.spawn().map_err(|error| error.to_string())?;
     let pid = child.pid();
@@ -641,6 +684,39 @@ fn open_main_window(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+fn cleanup_suppressed_writes(entries: &mut HashMap<String, std::time::Instant>, now: std::time::Instant) {
+    entries.retain(|_, recorded| now.duration_since(*recorded) < Duration::from_millis(LOCAL_WRITE_SUPPRESSION_WINDOW_MS));
+}
+
+fn record_local_workflow_write(state: &AppState, root: &str) -> Result<(), String> {
+    let mut entries = state
+        .local_write_suppression
+        .lock()
+        .map_err(|_| "local write suppression mutex poisoned".to_string())?;
+    let now = std::time::Instant::now();
+    cleanup_suppressed_writes(&mut entries, now);
+    entries.insert(canonicalize_path_string(root), now);
+    Ok(())
+}
+
+fn should_suppress_snapshot_event(state: &AppState, paths: &[PathBuf]) -> bool {
+    let Ok(mut entries) = state.local_write_suppression.lock() else {
+        return false;
+    };
+    let now = std::time::Instant::now();
+    cleanup_suppressed_writes(&mut entries, now);
+    paths.iter().any(|path| {
+        let normalized = path
+            .canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .into_owned();
+        entries
+            .keys()
+            .any(|root| normalized.starts_with(&format!("{root}{}{}", std::path::MAIN_SEPARATOR, ".project-workflow")))
+    })
+}
+
 fn reload_watcher(app: &AppHandle, state: &AppState, settings: &Settings) -> Result<(), String> {
     let app_handle = app.clone();
     let last_emit_at = Arc::new(Mutex::new(None::<std::time::Instant>));
@@ -656,6 +732,10 @@ fn reload_watcher(app: &AppHandle, state: &AppState, settings: &Settings) -> Res
             if !relevant {
                 return;
             }
+            let state_ref = app_handle.state::<AppState>();
+            if should_suppress_snapshot_event(&state_ref, &event.paths) {
+                return;
+            }
             let Ok(mut last_emit) = last_emit_at.lock() else {
                 return;
             };
@@ -667,7 +747,7 @@ fn reload_watcher(app: &AppHandle, state: &AppState, settings: &Settings) -> Res
                 return;
             }
             *last_emit = Some(now);
-            let _ = app_handle.emit("workflow://changed", ());
+            let _ = app_handle.emit(WORKFLOW_SNAPSHOT_EVENT, ());
         },
         Config::default(),
     )
@@ -733,7 +813,7 @@ fn refreshed_projects(state: &AppState, settings: &Settings) -> Result<Vec<Proje
     }
 
     let index_db_path = state.index_db_path.to_string_lossy().into_owned();
-    list_projects(&settings.watched_roots, Some(index_db_path.as_str())).map_err(|error| error.to_string())
+    list_projects(&settings.watched_roots, index_db_path.as_str()).map_err(|error| error.to_string())
 }
 
 fn build_snapshot_payload(state: &AppState, settings: &Settings) -> Result<LoadStatePayload, String> {
@@ -793,34 +873,36 @@ fn refresh_projects(app: AppHandle, state: State<AppState>) -> Result<String, St
 
 #[tauri::command]
 fn add_watch_root(app: AppHandle, state: State<AppState>, root: String) -> Result<String, String> {
-    let mut settings = ensure_settings(&state)?;
     let root = resolve_input_path(&root)?.to_string_lossy().into_owned();
-    if !settings.watched_roots.contains(&root) {
-        settings.watched_roots.push(root);
-        settings.watched_roots.sort();
-    }
-    save_settings(&state, &settings)?;
+    let index_db_path = state.index_db_path.to_string_lossy().into_owned();
+    add_watched_root_index_state(&root, index_db_path.as_str()).map_err(|error| error.to_string())?;
+    let settings = ensure_settings(&state)?;
     reload_watcher(&app, &state, &settings)?;
-    if settings.mcp.enabled {
-        restart_bridge(&app, &state, "startRequested")?;
-    }
     to_json_string(&refresh_projects_payload(&app, &state)?)
 }
 
 #[tauri::command]
 fn remove_watch_root(app: AppHandle, state: State<AppState>, root: String) -> Result<String, String> {
     let mut settings = ensure_settings(&state)?;
-    settings.watched_roots.retain(|candidate| candidate != &root);
-    if settings.last_focused_project.as_deref() == Some(root.as_str()) {
+    let root_path = PathBuf::from(root.trim());
+    let root = root_path
+        .canonicalize()
+        .unwrap_or(root_path)
+        .to_string_lossy()
+        .into_owned();
+    if settings
+        .last_focused_project
+        .as_deref()
+        .map(|focused| focused == root || focused.starts_with(&format!("{root}{}", std::path::MAIN_SEPARATOR)))
+        .unwrap_or(false)
+    {
         settings.last_focused_project = None;
     }
     save_settings(&state, &settings)?;
     let index_db_path = state.index_db_path.to_string_lossy().into_owned();
     remove_watched_root_index_state(&root, index_db_path.as_str()).map_err(|error| error.to_string())?;
+    let settings = ensure_settings(&state)?;
     reload_watcher(&app, &state, &settings)?;
-    if settings.mcp.enabled {
-        restart_bridge(&app, &state, "startRequested")?;
-    }
     to_json_string(&refresh_projects_payload(&app, &state)?)
 }
 
@@ -852,10 +934,11 @@ fn init_project(app: AppHandle, state: State<AppState>, root: String, name: Stri
         kind: Some(DEFAULT_PROJECT_KIND.to_string()),
         owner: Some(DESKTOP_ACTOR_ID.to_string()),
         tags: Some(Vec::new()),
-        index_db_path: Some(index_db_path),
+        index_db_path,
     })
     .map_err(|error| error.to_string())?;
 
+    let _ = record_local_workflow_write(&state, &root);
     let mut settings = ensure_settings(&state)?;
     settings.last_focused_project = Some(root);
     save_settings(&state, &settings)?;
@@ -870,9 +953,10 @@ fn start_step_cmd(app: AppHandle, state: State<AppState>, root: String, step_id:
         &step_id,
         desktop_actor(),
         desktop_session_context(),
-        Some(index_db_path.as_str()),
+        index_db_path.as_str(),
     )
     .map_err(|error| error.to_string())?;
+    let _ = record_local_workflow_write(&state, &root);
     let _ = load_state_payload(&app, &state);
     to_json_string(&result)
 }
@@ -885,9 +969,10 @@ fn complete_step_cmd(app: AppHandle, state: State<AppState>, root: String, step_
         &step_id,
         desktop_actor(),
         desktop_session_context(),
-        Some(index_db_path.as_str()),
+        index_db_path.as_str(),
     )
     .map_err(|error| error.to_string())?;
+    let _ = record_local_workflow_write(&state, &root);
     let _ = load_state_payload(&app, &state);
     to_json_string(&result)
 }
@@ -900,9 +985,10 @@ fn add_blocker_cmd(app: AppHandle, state: State<AppState>, root: String, blocker
         &blocker,
         desktop_actor(),
         desktop_session_context(),
-        Some(index_db_path.as_str()),
+        index_db_path.as_str(),
     )
     .map_err(|error| error.to_string())?;
+    let _ = record_local_workflow_write(&state, &root);
     let _ = load_state_payload(&app, &state);
     to_json_string(&result)
 }
@@ -920,9 +1006,10 @@ fn clear_blocker_cmd(
         blocker.as_deref(),
         desktop_actor(),
         desktop_session_context(),
-        Some(index_db_path.as_str()),
+        index_db_path.as_str(),
     )
     .map_err(|error| error.to_string())?;
+    let _ = record_local_workflow_write(&state, &root);
     let _ = load_state_payload(&app, &state);
     to_json_string(&result)
 }
@@ -935,9 +1022,10 @@ fn add_note_cmd(app: AppHandle, state: State<AppState>, root: String, note: Stri
         &note,
         desktop_actor(),
         desktop_session_context(),
-        Some(index_db_path.as_str()),
+        index_db_path.as_str(),
     )
     .map_err(|error| error.to_string())?;
+    let _ = record_local_workflow_write(&state, &root);
     let _ = load_state_payload(&app, &state);
     to_json_string(&result)
 }
@@ -963,9 +1051,10 @@ fn propose_decision_cmd(
         },
         desktop_actor(),
         desktop_session_context(),
-        Some(index_db_path.as_str()),
+        index_db_path.as_str(),
     )
     .map_err(|error| error.to_string())?;
+    let _ = record_local_workflow_write(&state, &root);
     let _ = load_state_payload(&app, &state);
     to_json_string(&result)
 }
@@ -1146,6 +1235,7 @@ fn main() {
                 settings_path: support_dir.join("settings.json"),
                 index_db_path,
                 watcher: Mutex::new(None),
+                local_write_suppression: Mutex::new(HashMap::new()),
                 tray_handles: Mutex::new(None),
                 bridge: Mutex::new(BridgeSupervisor {
                     child: None,
@@ -1162,9 +1252,11 @@ fn main() {
             let state_ref = app.state::<AppState>();
             build_tray(app.handle(), &state_ref)?;
             let settings = ensure_settings(&state_ref)?;
+            save_settings(&state_ref, &settings)?;
             reload_watcher(app.handle(), &state_ref, &settings)?;
             if watched_roots_need_startup_refresh(&state_ref, &settings)? {
                 let _ = refresh_projects_payload(app.handle(), &state_ref);
+                let _ = app.handle().emit(WORKFLOW_TOPOLOGY_EVENT, ());
             } else {
                 let _ = load_state_payload(app.handle(), &state_ref);
             }
@@ -1231,6 +1323,7 @@ mod tests {
             settings_path: base.join("settings.json"),
             index_db_path: base.join("workflow-index.sqlite"),
             watcher: Mutex::new(None),
+            local_write_suppression: Mutex::new(HashMap::new()),
             tray_handles: Mutex::new(None),
             bridge: Mutex::new(BridgeSupervisor {
                 child: None,
@@ -1328,6 +1421,60 @@ mod tests {
     }
 
     #[test]
+    fn desktop_watched_roots_resolve_from_env_before_canonical_store() {
+        let base = unique_temp_dir("desktop-root-resolution");
+        let state = test_state(&base);
+        let persisted = serde_json::to_string_pretty(&PersistedSettings::default())
+            .expect("persisted settings should serialize");
+        fs::write(&state.settings_path, persisted).expect("settings should write");
+
+        let canonical_root = base.join("canonical-root");
+        let env_root = base.join("env-root");
+        fs::create_dir_all(&canonical_root).expect("canonical root should create");
+        fs::create_dir_all(&env_root).expect("env root should create");
+
+        add_watched_root_index_state(
+            canonical_root.display().to_string().as_str(),
+            state.index_db_path.to_string_lossy().as_ref(),
+        )
+        .expect("canonical root should store");
+
+        let env_root_raw = env_root.display().to_string();
+        let resolved =
+            resolve_desktop_watched_roots(&state, Some(env_root_raw.as_str())).expect("desktop roots should resolve");
+
+        assert_eq!(
+            resolved,
+            vec![env_root
+                .canonicalize()
+                .expect("env root should canonicalize")
+                .to_string_lossy()
+                .into_owned()]
+        );
+    }
+
+    #[test]
+    fn local_write_suppression_ignores_recent_workflow_events() {
+        let base = unique_temp_dir("suppression");
+        let state = test_state(&base);
+        let repo = base.join("repo");
+        fs::create_dir_all(repo.join(".project-workflow/local")).expect("workflow dir should create");
+        fs::write(
+            repo.join(".project-workflow/local/runtime.yaml"),
+            "status: todo\n",
+        )
+        .expect("runtime file should write");
+
+        record_local_workflow_write(&state, repo.display().to_string().as_str())
+            .expect("local write should record");
+
+        assert!(should_suppress_snapshot_event(
+            &state,
+            &[repo.join(".project-workflow/local/runtime.yaml")]
+        ));
+    }
+
+    #[test]
     fn snapshot_payload_keeps_new_repo_hidden_until_refresh() {
         let base = unique_temp_dir("snapshot-refresh");
         let state = test_state(&base);
@@ -1344,7 +1491,7 @@ mod tests {
             kind: Some(DEFAULT_PROJECT_KIND.to_string()),
             owner: Some(DESKTOP_ACTOR_ID.to_string()),
             tags: Some(Vec::new()),
-            index_db_path: Some(state.index_db_path.to_string_lossy().into_owned()),
+            index_db_path: state.index_db_path.to_string_lossy().into_owned(),
         })
         .expect("initial repo should initialize");
 

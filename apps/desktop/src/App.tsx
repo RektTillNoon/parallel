@@ -356,14 +356,30 @@ export default function App() {
           return;
         }
 
-        const unlistenWorkflow = await listen('workflow://changed', () => {
+        const unlistenSnapshot = await listen('workflow://snapshot-changed', () => {
           void reloadState(selectedRootRef.current);
         });
         if (!active) {
-          unlistenWorkflow();
+          unlistenSnapshot();
           return;
         }
-        unlisteners.push(unlistenWorkflow);
+        unlisteners.push(unlistenSnapshot);
+
+        const unlistenTopology = await listen('workflow://topology-changed', () => {
+          void (async () => {
+            try {
+              const nextState = await refreshProjects();
+              await applyLoadState(nextState, { selectRoot: selectedRootRef.current });
+            } catch {
+              void reloadState(selectedRootRef.current);
+            }
+          })();
+        });
+        if (!active) {
+          unlistenTopology();
+          return;
+        }
+        unlisteners.push(unlistenTopology);
 
         const unlistenBridge = await listen<BridgeStateEvent>('bridge://state-changed', (event) => {
           setState((current) =>

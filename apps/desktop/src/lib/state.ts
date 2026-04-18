@@ -15,11 +15,12 @@ export function resolveSelectionState(
   nextState: LoadStatePayload,
   explicitRoot?: string | null,
 ): SelectionResolution {
+  const preferredRoot = explicitRoot ?? nextState.settings.lastFocusedProject ?? null;
   const selectedRoot =
-    explicitRoot ??
-    nextState.settings.lastFocusedProject ??
-    nextState.projects[0]?.root ??
-    null;
+    (preferredRoot &&
+    nextState.projects.some((project) => project.root === preferredRoot)
+      ? preferredRoot
+      : nextState.projects[0]?.root) ?? null;
 
   const selectedProject =
     selectedRoot ? nextState.projects.find((project) => project.root === selectedRoot) ?? null : null;
