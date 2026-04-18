@@ -13,7 +13,9 @@ import {
 
 import {
   addWatchRoot,
+  applyAgentDefaults,
   getCliInstallStatus,
+  getAgentDefaultsStatus,
   getBridgeClientSnippets,
   getBridgeStatus,
   initProject,
@@ -42,6 +44,8 @@ import CollapsibleSection from './components/CollapsibleSection';
 import ContextRail from './components/ContextRail';
 import SessionLedger from './components/SessionLedger';
 import type {
+  AgentInstallAction,
+  AgentTargetStatus,
   BoardProjectDetail,
   BridgeStateEvent,
   CliInstallStatus,
@@ -67,19 +71,11 @@ const emptyLoadState: LoadStatePayload = {
     pid: null,
     startedAt: null,
     lastError: null,
-    setupStale: false,
-    staleReasons: [],
-    staleClients: [],
   },
 };
 
 const relativeTimeFormatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
 const LazySettingsModal = lazy(() => import('./components/SettingsModal'));
-const staleClientLabels = {
-  codex: 'Codex',
-  claudeCode: 'Claude Code',
-  claudeDesktop: 'Claude Desktop',
-} as const;
 
 export function choosePrimaryBoardRow(
   board: SessionBoardData,
@@ -316,9 +312,12 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [rootsOpen, setRootsOpen] = useState(false);
   const [bridgeOpen, setBridgeOpen] = useState(true);
+  const [agentDefaultsOpen, setAgentDefaultsOpen] = useState(true);
   const [cliOpen, setCliOpen] = useState(false);
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [cliStatus, setCliStatus] = useState<CliInstallStatus | null>(null);
+  const [agentStatuses, setAgentStatuses] = useState<AgentTargetStatus[] | null>(null);
+  const [agentPendingKind, setAgentPendingKind] = useState<string | null>(null);
   const [cliPending, setCliPending] = useState(false);
   const reloadInFlight = useRef(false);
   const reloadQueued = useRef<string | null | undefined>(undefined);
@@ -489,9 +488,13 @@ export default function App() {
     let active = true;
     void (async () => {
       try {
-        const status = await getCliInstallStatus();
+        const [status, nextAgentStatuses] = await Promise.all([
+          getCliInstallStatus(),
+          getAgentDefaultsStatus(selectedRoot),
+        ]);
         if (active) {
           setCliStatus(status);
+          setAgentStatuses(nextAgentStatuses);
         }
       } catch (cliError) {
         if (active) {
@@ -503,7 +506,13 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [settingsOpen]);
+  }, [
+    selectedRoot,
+    settingsOpen,
+    state?.mcpRuntime.boundPort,
+    state?.settings.mcp.port,
+    state?.settings.mcp.token,
+  ]);
 
   const selectedSummary = useMemo(() => {
     return state?.projects.find((project) => project.root === selectedRoot) ?? null;
@@ -656,33 +665,34 @@ export default function App() {
   const handleCopyBridgeSnippet = useCallback(async (kind: string) => {
     setError(null);
     try {
-      const snippets = await getBridgeClientSnippets(kind);
+      const snippets = await getBridgeClientSnippets(kind, selectedRootRef.current);
       const [snippet] = snippets;
       if (!snippet) {
         throw new Error(`No snippet returned for ${kind}`);
       }
 
       await navigator.clipboard.writeText(snippet.content);
-      setState((current) => {
-        if (!current) {
-          return current;
-        }
-
-        const staleClients = current.mcpRuntime.staleClients.filter((candidate) => candidate !== kind);
-        return {
-          ...current,
-          mcpRuntime: {
-            ...current.mcpRuntime,
-            staleClients,
-            setupStale: staleClients.length > 0,
-            staleReasons: staleClients.length > 0 ? current.mcpRuntime.staleReasons : [],
-          },
-        };
-      });
     } catch (mutationError) {
       setError(mutationError instanceof Error ? mutationError.message : String(mutationError));
     }
   }, []);
+
+  const handleApplyAgentDefaults = useCallback(
+    async (kind: string, action: AgentInstallAction) => {
+      setError(null);
+      setAgentPendingKind(kind);
+      try {
+        await applyAgentDefaults(kind, action, selectedRootRef.current);
+        const nextStatuses = await getAgentDefaultsStatus(selectedRootRef.current);
+        setAgentStatuses(nextStatuses);
+      } catch (mutationError) {
+        setError(mutationError instanceof Error ? mutationError.message : String(mutationError));
+      } finally {
+        setAgentPendingKind(null);
+      }
+    },
+    [],
+  );
 
   const handleInstallCli = useCallback(async () => {
     setError(null);
@@ -727,6 +737,7 @@ export default function App() {
   const handleCloseSettings = useCallback(() => setSettingsOpen(false), []);
   const handleToggleRoots = useCallback(() => setRootsOpen((open) => !open), []);
   const handleToggleBridge = useCallback(() => setBridgeOpen((open) => !open), []);
+  const handleToggleAgentDefaults = useCallback(() => setAgentDefaultsOpen((open) => !open), []);
   const handleToggleCli = useCallback(() => setCliOpen((open) => !open), []);
   const handleWatchRootInputChange = useCallback((value: string) => setWatchRootInput(value), []);
   const handleProjectSelection = useCallback(
@@ -757,17 +768,9 @@ export default function App() {
       pid: null,
       startedAt: null,
       lastError: null,
-      setupStale: false,
-      staleReasons: [],
-      staleClients: [],
     },
     Boolean(state?.settings.mcp.enabled),
   );
-  const staleClientNames = useMemo(() => {
-    return (state?.mcpRuntime.staleClients ?? [])
-      .map((kind) => staleClientLabels[kind as keyof typeof staleClientLabels] ?? kind)
-      .join(', ');
-  }, [state?.mcpRuntime.staleClients]);
 
   return (
     <div className="shell">
@@ -880,12 +883,15 @@ export default function App() {
             bridgeStatus={bridgeStatus}
             bridgeUrl={bridgeUrl}
             maskedToken={maskedToken}
-            setupStale={Boolean(state?.mcpRuntime.setupStale)}
-            staleClientNames={staleClientNames}
             bridgeLastError={state?.mcpRuntime.lastError ?? null}
             onRestartBridge={() => void handleRestartBridge()}
             onRegenerateBridgeToken={() => void handleRegenerateBridgeToken()}
             onCopyBridgeSnippet={(kind) => void handleCopyBridgeSnippet(kind)}
+            agentDefaultsOpen={agentDefaultsOpen}
+            onToggleAgentDefaults={handleToggleAgentDefaults}
+            agentStatuses={agentStatuses}
+            agentPendingKind={agentPendingKind}
+            onApplyAgentDefaults={(kind, action) => void handleApplyAgentDefaults(kind, action)}
             cliOpen={cliOpen}
             onToggleCli={handleToggleCli}
             cliStatus={cliStatus}

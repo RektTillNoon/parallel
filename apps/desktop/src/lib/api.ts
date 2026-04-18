@@ -1,6 +1,13 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 
-import type { BridgeSnippet, CliInstallStatus, LoadStatePayload, ProjectDetail } from './types';
+import type {
+  AgentInstallAction,
+  AgentTargetStatus,
+  BridgeSnippet,
+  CliInstallStatus,
+  LoadStatePayload,
+  ProjectDetail,
+} from './types';
 
 function ensureTauriRuntime(command: string) {
   if (!isTauri()) {
@@ -96,8 +103,22 @@ export async function regenerateBridgeToken() {
   return invokeJson<LoadStatePayload>('regenerate_bridge_token');
 }
 
-export async function getBridgeClientSnippets(kind: string) {
-  return invokeJson<BridgeSnippet[]>('get_bridge_client_snippets', { args: { kind } });
+export async function getBridgeClientSnippets(kind: string, root?: string | null) {
+  return invokeJson<BridgeSnippet[]>('get_bridge_client_snippets', { args: { kind, root } });
+}
+
+export async function getAgentDefaultsStatus(root?: string | null) {
+  return invokeJson<AgentTargetStatus[]>('get_agent_defaults_status', { args: { root } });
+}
+
+export async function applyAgentDefaults(
+  kind: string,
+  action: AgentInstallAction,
+  root?: string | null,
+) {
+  return invokeJson<AgentTargetStatus>('apply_agent_defaults_cmd', {
+    args: { kind, action, root },
+  });
 }
 
 export async function getCliInstallStatus() {

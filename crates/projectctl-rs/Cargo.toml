@@ -3,6 +3,10 @@ name = "parallel-projectctl"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "parallel_projectctl"
+path = "src/lib.rs"
+
 [[bin]]
 name = "projectctl"
 path = "src/main.rs"
@@ -16,6 +20,7 @@ schemars = "0.8.21"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 tokio = { version = "1.47.1", features = ["macros", "rt-multi-thread", "signal"] }
+toml_edit = "0.25.11"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 
 [dev-dependencies]

@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeSet,
     net::TcpListener,
     path::{Path, PathBuf},
 };
@@ -10,7 +9,6 @@ use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_BRIDGE_PORT: u16 = 4855;
 pub const BRIDGE_EVENT: &str = "bridge://state-changed";
-pub const ALL_CLIENT_KINDS: [&str; 3] = ["codex", "claudeCode", "claudeDesktop"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -38,20 +36,6 @@ pub struct BridgeRuntimeSnapshot {
     pub pid: Option<u32>,
     pub started_at: Option<String>,
     pub last_error: Option<String>,
-    pub setup_stale: bool,
-    pub stale_reasons: Vec<String>,
-    pub stale_clients: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BridgeSnippet {
-    pub kind: String,
-    pub label: String,
-    pub content: String,
-    pub copy_label: String,
-    pub notes: String,
-    pub stale: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -160,93 +144,6 @@ fn resolve_bundled_projectctl_path_with_manifest_dir(
     packaged_sibling
 }
 
-pub fn mark_clients_stale(snapshot: &mut BridgeRuntimeSnapshot, reason: &str) {
-    if !snapshot
-        .stale_reasons
-        .iter()
-        .any(|candidate| candidate == reason)
-    {
-        snapshot.stale_reasons.push(reason.to_string());
-    }
-    let mut clients = BTreeSet::from_iter(snapshot.stale_clients.iter().cloned());
-    for kind in ALL_CLIENT_KINDS {
-        clients.insert(kind.to_string());
-    }
-    snapshot.stale_clients = clients.into_iter().collect();
-    snapshot.setup_stale = !snapshot.stale_clients.is_empty();
-}
-
-pub fn clear_client_stale(snapshot: &mut BridgeRuntimeSnapshot, kind: &str) {
-    snapshot.stale_clients.retain(|candidate| candidate != kind);
-    snapshot.setup_stale = !snapshot.stale_clients.is_empty();
-    if !snapshot.setup_stale {
-        snapshot.stale_reasons.clear();
-    }
-}
-
-pub fn is_client_stale(snapshot: &BridgeRuntimeSnapshot, kind: &str) -> bool {
-    snapshot
-        .stale_clients
-        .iter()
-        .any(|candidate| candidate == kind)
-}
-
-pub fn build_client_snippet(
-    kind: &str,
-    url: &str,
-    token: &str,
-    projectctl_path: &Path,
-    snapshot: &BridgeRuntimeSnapshot,
-) -> Result<BridgeSnippet, String> {
-    let stale = is_client_stale(snapshot, kind);
-    match kind {
-        "codex" => Ok(BridgeSnippet {
-            kind: kind.to_string(),
-            label: "Codex setup".to_string(),
-            copy_label: "Copy Codex setup".to_string(),
-            notes: "Direct streamable HTTP MCP setup for Codex. Re-copy after endpoint or token changes.".to_string(),
-            stale,
-            content: format!(
-                "export PARALLEL_MCP_TOKEN='{token}'\ncodex mcp add parallel --url {url} --bearer-token-env-var PARALLEL_MCP_TOKEN"
-            ),
-        }),
-        "claudeCode" => Ok(BridgeSnippet {
-            kind: kind.to_string(),
-            label: "Claude Code setup".to_string(),
-            copy_label: "Copy Claude Code setup".to_string(),
-            notes: "Direct streamable HTTP MCP setup for Claude Code. Re-copy after endpoint or token changes.".to_string(),
-            stale,
-            content: format!(
-                "claude mcp add --transport http parallel {url} --header \"Authorization: Bearer {token}\""
-            ),
-        }),
-        "claudeDesktop" => Ok(BridgeSnippet {
-            kind: kind.to_string(),
-            label: "Claude Desktop setup".to_string(),
-            copy_label: "Copy Claude Desktop setup".to_string(),
-            notes: "Use the bundled projectctl stdio proxy. Re-copy after endpoint or token changes.".to_string(),
-            stale,
-            content: serde_json::to_string_pretty(&serde_json::json!({
-                "mcpServers": {
-                    "parallel": {
-                        "command": projectctl_path.display().to_string(),
-                        "args": [
-                            "mcp",
-                            "proxy-stdio",
-                            "--url",
-                            url,
-                            "--token",
-                            token
-                        ]
-                    }
-                }
-            }))
-            .map_err(|error| error.to_string())?,
-        }),
-        _ => Err(format!("Unknown client snippet kind: {kind}")),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,29 +161,6 @@ mod tests {
                 .expect("system time before unix epoch")
                 .as_nanos()
         ))
-    }
-
-    #[test]
-    fn marks_all_clients_stale() {
-        let mut snapshot = BridgeRuntimeSnapshot::default();
-        mark_clients_stale(&mut snapshot, "endpointChanged");
-        assert!(snapshot.setup_stale);
-        assert_eq!(snapshot.stale_clients.len(), 3);
-        assert!(snapshot
-            .stale_reasons
-            .contains(&"endpointChanged".to_string()));
-    }
-
-    #[test]
-    fn clears_stale_state_per_client() {
-        let mut snapshot = BridgeRuntimeSnapshot::default();
-        mark_clients_stale(&mut snapshot, "tokenRotated");
-        clear_client_stale(&mut snapshot, "codex");
-        assert!(!snapshot.stale_clients.contains(&"codex".to_string()));
-        clear_client_stale(&mut snapshot, "claudeCode");
-        clear_client_stale(&mut snapshot, "claudeDesktop");
-        assert!(!snapshot.setup_stale);
-        assert!(snapshot.stale_reasons.is_empty());
     }
 
     #[test]
@@ -329,5 +203,23 @@ mod tests {
         assert_eq!(resolved, dev_binary);
 
         fs::remove_dir_all(&root).expect("remove temp test dir");
+    }
+
+    #[test]
+    fn bridge_state_event_payload_omits_setup_stale_fields() {
+        let payload = serde_json::to_value(BridgeStateEvent {
+            reason: "snapshot".to_string(),
+            mcp: BridgeSettings::default(),
+            mcp_runtime: BridgeRuntimeSnapshot::default(),
+        })
+        .expect("payload should serialize");
+
+        let runtime = payload
+            .get("mcpRuntime")
+            .and_then(serde_json::Value::as_object)
+            .expect("runtime payload should serialize as object");
+        assert!(runtime.get("setupStale").is_none());
+        assert!(runtime.get("staleClients").is_none());
+        assert!(runtime.get("staleReasons").is_none());
     }
 }

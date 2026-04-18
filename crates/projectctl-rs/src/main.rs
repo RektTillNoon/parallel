@@ -3,6 +3,10 @@ mod mcp;
 use std::{env, path::PathBuf, process};
 
 use anyhow::{anyhow, bail, Result};
+use parallel_projectctl::{
+    apply_agent_defaults, inspect_agent_defaults, AgentDefaultsContext, ClientKind, InstallAction,
+    InstallScope,
+};
 use parallel_workflow_core::{
     accept_decision, add_blocker, add_note, append_activity_event, canonical_index_db_path,
     clear_blocker, complete_step, ensure_session, get_project, init_project, list_projects,
@@ -182,6 +186,8 @@ fn help_payload() -> JsonValue {
         "projectctl note add <summary> [--root PATH]",
         "projectctl handoff refresh [--root PATH]",
         "projectctl decision propose --title TITLE --context TEXT --decision TEXT --impact TEXT [--root PATH]",
+        "projectctl agent status --target codex|claude-code|claude-desktop|all --scope global|repo|both [--repo PATH] [--url URL] [--token TOKEN] [--projectctl-path PATH]",
+        "projectctl agent install --target codex|claude-code|claude-desktop|all --scope global|repo|both [--repo PATH] [--url URL] [--token TOKEN] [--projectctl-path PATH] [--action install|update|reinstall]",
         "projectctl mcp serve-http --port PORT --token TOKEN",
         "projectctl mcp proxy-stdio --url URL --token TOKEN"
       ],
@@ -311,6 +317,48 @@ fn resolve_serve_http_roots(parsed: &ParsedArgs) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn parse_client_kind(raw: &str) -> Result<ClientKind> {
+    match raw {
+        "codex" => Ok(ClientKind::Codex),
+        "claude-code" | "claudeCode" => Ok(ClientKind::ClaudeCode),
+        "claude-desktop" | "claudeDesktop" => Ok(ClientKind::ClaudeDesktop),
+        _ => bail!("Unknown agent target \"{raw}\""),
+    }
+}
+
+fn parse_install_scope(raw: Option<String>) -> Result<InstallScope> {
+    match raw.as_deref().unwrap_or("global") {
+        "global" => Ok(InstallScope::Global),
+        "repo" => Ok(InstallScope::Repo),
+        "both" => Ok(InstallScope::Both),
+        other => bail!("Unknown install scope \"{other}\""),
+    }
+}
+
+fn parse_install_action(subcommand: &str, parsed: &ParsedArgs) -> Result<InstallAction> {
+    match flag(parsed, "action").as_deref().unwrap_or(subcommand) {
+        "install" => Ok(InstallAction::Install),
+        "update" => Ok(InstallAction::Update),
+        "reinstall" => Ok(InstallAction::Reinstall),
+        other => bail!("Unknown agent action \"{other}\""),
+    }
+}
+
+fn agent_defaults_context(parsed: &ParsedArgs) -> AgentDefaultsContext {
+    let projectctl_path = flag(parsed, "projectctl-path")
+        .map(PathBuf::from)
+        .or_else(|| env::current_exe().ok());
+    AgentDefaultsContext {
+        repo_root: flag(parsed, "repo").map(PathBuf::from),
+        bridge_url: flag(parsed, "url"),
+        bridge_token: flag(parsed, "token"),
+        projectctl_command_path: projectctl_path,
+        path_env: env::var("PATH").ok(),
+        home_dir: env::var_os("HOME").map(PathBuf::from),
+        appdata_dir: env::var_os("APPDATA").map(PathBuf::from),
+    }
+}
+
 fn main() {
     init_tracing();
     if let Err(error) = run() {
@@ -344,6 +392,38 @@ fn run() -> Result<()> {
     let index_db_path = resolve_index_db(&parsed)?;
 
     match command.as_deref() {
+        Some("agent") => {
+            let scope = parse_install_scope(flag(&parsed, "scope"))?;
+            let context = agent_defaults_context(&parsed);
+            let targets = match flag(&parsed, "target").as_deref().unwrap_or("all") {
+                "all" => ClientKind::ALL.to_vec(),
+                other => vec![parse_client_kind(other)?],
+            };
+            let results = match subcommand.as_deref().unwrap_or("status") {
+                "status" => targets
+                    .into_iter()
+                    .map(|kind| inspect_agent_defaults(&context, kind, scope))
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(anyhow::Error::msg)?,
+                "install" | "update" | "reinstall" => {
+                    let action = parse_install_action(subcommand.as_deref().unwrap_or("install"), &parsed)?;
+                    targets
+                        .into_iter()
+                        .map(|kind| apply_agent_defaults(&context, kind, scope, action))
+                        .collect::<std::result::Result<Vec<_>, _>>()
+                        .map_err(anyhow::Error::msg)?
+                }
+                other => bail!("Unknown agent subcommand \"{other}\""),
+            };
+            let has_error = results.iter().any(|result| {
+                matches!(result.status, parallel_projectctl::InstallStatus::Error)
+            });
+            print_result(&results)?;
+            if has_error {
+                bail!("One or more agent default operations failed");
+            }
+            Ok(())
+        }
         Some("mcp") => match subcommand.as_deref() {
             Some("serve-http") => {
                 let port = required_flag(&parsed, "port")?.parse::<u16>()?;

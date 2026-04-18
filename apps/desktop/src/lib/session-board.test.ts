@@ -68,9 +68,6 @@ const loadState: LoadStatePayload = {
     pid: null,
     startedAt: null,
     lastError: null,
-    setupStale: false,
-    staleReasons: [],
-    staleClients: [],
   },
 };
 

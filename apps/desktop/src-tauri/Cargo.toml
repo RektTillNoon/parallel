@@ -11,6 +11,7 @@ tauri-build = { version = "2.0.6", features = [] }
 [dependencies]
 base64 = "0.22.1"
 notify = "6.1.1"
+parallel-projectctl = { path = "../../../crates/projectctl-rs" }
 parallel-workflow-core = { path = "../../../crates/workflow-core-rs" }
 rand = "0.8.5"
 reqwest = { version = "0.12.24", default-features = false, features = ["blocking", "json", "rustls-tls"] }

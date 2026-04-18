@@ -16,9 +16,6 @@ export interface BridgeRuntime {
   pid: number | null;
   startedAt: string | null;
   lastError: string | null;
-  setupStale: boolean;
-  staleReasons: string[];
-  staleClients: string[];
 }
 
 export interface BridgeSnippet {
@@ -45,6 +42,27 @@ export interface CliInstallStatus {
   shellExport: string;
   shellProfile: string;
   persistCommand: string;
+}
+
+export type AgentClientKind = 'codex' | 'claudeCode' | 'claudeDesktop';
+export type AgentInstallStatus = 'installed' | 'missing' | 'stale' | 'unsupported' | 'error';
+export type AgentInstallAction = 'install' | 'update' | 'reinstall';
+
+export interface AgentScopeStatus {
+  scope: 'global' | 'repo';
+  status: AgentInstallStatus;
+  reasons: string[];
+  changedPaths: string[];
+}
+
+export interface AgentTargetStatus {
+  kind: AgentClientKind;
+  label: string;
+  status: AgentInstallStatus;
+  reasons: string[];
+  global: AgentScopeStatus | null;
+  repo: AgentScopeStatus | null;
+  changedPaths: string[];
 }
 
 export interface ProjectSummary {

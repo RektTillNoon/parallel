@@ -13,11 +13,16 @@ use std::{
 };
 
 use bridge::{
-    build_client_snippet, bundled_sidecar_binary_filename, clear_client_stale, find_available_port,
-    generate_token, mark_clients_stale, resolve_bridge_url, resolve_bundled_projectctl_path,
+    bundled_sidecar_binary_filename, find_available_port, generate_token, resolve_bridge_url,
+    resolve_bundled_projectctl_path,
     BridgeRuntimeSnapshot, BridgeSettings, BridgeStateEvent, BRIDGE_EVENT, DEFAULT_BRIDGE_PORT,
 };
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
+use parallel_projectctl::{
+    apply_agent_defaults, build_client_snippet, inspect_agent_defaults,
+    stable_projectctl_install_path, AgentDefaultsContext, AgentTargetStatus, ClientKind,
+    InstallAction, InstallScope, InstallStatus,
+};
 use parallel_workflow_core::{
     add_blocker, add_note, add_watched_root_index_state, canonical_index_db_path, clear_blocker,
     complete_step, get_board_project_detail, get_project as get_project_service,
@@ -247,27 +252,7 @@ fn display_home_relative(path: &Path, home_dir: &Path) -> String {
 }
 
 fn resolve_cli_install_path(path_env: Option<&str>, home_dir: &Path) -> PathBuf {
-    let home_bin = home_dir.join("bin");
-    if path_entries(path_env)
-        .iter()
-        .any(|entry| entry == &home_bin)
-    {
-        return home_bin.join(bundled_sidecar_binary_filename());
-    }
-
-    let local_bin = home_dir.join(".local").join("bin");
-    if path_entries(path_env)
-        .iter()
-        .any(|entry| entry == &local_bin)
-    {
-        return local_bin.join(bundled_sidecar_binary_filename());
-    }
-
-    if cfg!(target_os = "macos") {
-        return home_bin.join(bundled_sidecar_binary_filename());
-    }
-
-    local_bin.join(bundled_sidecar_binary_filename())
+    stable_projectctl_install_path(path_env, home_dir)
 }
 
 fn install_dir_on_path(path_env: Option<&str>, install_path: &Path) -> bool {
@@ -668,7 +653,6 @@ fn start_bridge(app: &AppHandle, state: &AppState) -> Result<(), String> {
         save_settings(state, &settings)?;
         update_bridge_runtime(app, state, "endpointChanged", |runtime| {
             runtime.last_error = None;
-            mark_clients_stale(runtime, "endpointChanged");
         })?;
     } else {
         save_settings(state, &settings)?;
@@ -1429,7 +1413,6 @@ fn regenerate_bridge_token(app: AppHandle, state: State<AppState>) -> Result<Str
     save_settings(&state, &settings)?;
     update_bridge_runtime(&app, &state, "tokenRotated", |runtime| {
         runtime.last_error = None;
-        mark_clients_stale(runtime, "tokenRotated");
     })?;
     if settings.mcp.enabled {
         spawn_bridge_restart(app.clone(), "tokenRotated");
@@ -1441,40 +1424,132 @@ fn regenerate_bridge_token(app: AppHandle, state: State<AppState>) -> Result<Str
 #[serde(rename_all = "camelCase")]
 struct GetBridgeSnippetsArgs {
     kind: String,
+    root: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentDefaultsArgs {
+    root: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApplyAgentDefaultsArgs {
+    kind: String,
+    action: String,
+    root: Option<String>,
+}
+
+fn parse_client_kind(raw: &str) -> Result<ClientKind, String> {
+    match raw {
+        "codex" => Ok(ClientKind::Codex),
+        "claudeCode" => Ok(ClientKind::ClaudeCode),
+        "claudeDesktop" => Ok(ClientKind::ClaudeDesktop),
+        _ => Err(format!("Unknown client kind: {raw}")),
+    }
+}
+
+fn parse_install_action(raw: &str) -> Result<InstallAction, String> {
+    match raw {
+        "install" => Ok(InstallAction::Install),
+        "update" => Ok(InstallAction::Update),
+        "reinstall" => Ok(InstallAction::Reinstall),
+        _ => Err(format!("Unknown install action: {raw}")),
+    }
+}
+
+fn agent_defaults_context(
+    state: &AppState,
+    root: Option<&str>,
+) -> Result<(AgentDefaultsContext, InstallScope), String> {
+    let settings = ensure_settings(state)?;
+    let home_dir = user_home_dir()?;
+    let path_env = env::var("PATH").ok();
+    let stable_cli_path = resolve_cli_install_path(path_env.as_deref(), &home_dir);
+    let bridge_port = state
+        .bridge
+        .lock()
+        .map_err(|_| "bridge mutex poisoned".to_string())?
+        .runtime
+        .bound_port
+        .unwrap_or(settings.mcp.port);
+    let scope = if root.is_some() {
+        InstallScope::Both
+    } else {
+        InstallScope::Global
+    };
+    Ok((
+        AgentDefaultsContext {
+            repo_root: root.map(PathBuf::from),
+            bridge_url: Some(resolve_bridge_url(bridge_port)),
+            bridge_token: Some(settings.mcp.token),
+            projectctl_command_path: Some(stable_cli_path),
+            path_env,
+            home_dir: Some(home_dir),
+            appdata_dir: env::var_os("APPDATA").map(PathBuf::from),
+        },
+        scope,
+    ))
+}
+
+fn inspect_all_agent_defaults(
+    state: &AppState,
+    root: Option<&str>,
+) -> Result<Vec<AgentTargetStatus>, String> {
+    let (context, scope) = agent_defaults_context(state, root)?;
+    ClientKind::ALL
+        .into_iter()
+        .map(|kind| inspect_agent_defaults(&context, kind, scope))
+        .collect()
 }
 
 #[tauri::command]
 fn get_bridge_client_snippets(
-    app: AppHandle,
     state: State<AppState>,
     args: GetBridgeSnippetsArgs,
 ) -> Result<String, String> {
-    let settings = ensure_settings(&state)?;
-    let executable = current_projectctl_path()?;
-    let url = {
-        let guard = state
-            .bridge
-            .lock()
-            .map_err(|_| "bridge mutex poisoned".to_string())?;
-        resolve_bridge_url(guard.runtime.bound_port.unwrap_or(settings.mcp.port))
-    };
-    let snippets = {
-        let mut guard = state
-            .bridge
-            .lock()
-            .map_err(|_| "bridge mutex poisoned".to_string())?;
-        let snippet = build_client_snippet(
-            &args.kind,
-            &url,
-            &settings.mcp.token,
-            &executable,
-            &guard.runtime,
-        )?;
-        clear_client_stale(&mut guard.runtime, &args.kind);
-        vec![snippet]
-    };
-    emit_bridge_state(&app, &state, "snippetsRefreshed")?;
+    let kind = parse_client_kind(&args.kind)?;
+    let (context, scope) = agent_defaults_context(&state, args.root.as_deref())?;
+    let status = inspect_agent_defaults(&context, kind, scope)?;
+    let snippet = build_client_snippet(
+        kind,
+        context
+            .bridge_url
+            .as_deref()
+            .ok_or_else(|| "Bridge URL missing".to_string())?,
+        context
+            .bridge_token
+            .as_deref()
+            .ok_or_else(|| "Bridge token missing".to_string())?,
+        context
+            .projectctl_command_path
+            .as_deref()
+            .ok_or_else(|| "projectctl path missing".to_string())?,
+        status.status == InstallStatus::Stale,
+    )?;
+    let snippets = vec![snippet];
     to_json_string(&snippets)
+}
+
+#[tauri::command]
+fn get_agent_defaults_status(
+    state: State<AppState>,
+    args: AgentDefaultsArgs,
+) -> Result<String, String> {
+    to_json_string(&inspect_all_agent_defaults(&state, args.root.as_deref())?)
+}
+
+#[tauri::command]
+fn apply_agent_defaults_cmd(
+    state: State<AppState>,
+    args: ApplyAgentDefaultsArgs,
+) -> Result<String, String> {
+    let kind = parse_client_kind(&args.kind)?;
+    let action = parse_install_action(&args.action)?;
+    let (context, scope) = agent_defaults_context(&state, args.root.as_deref())?;
+    let status = apply_agent_defaults(&context, kind, scope, action)?;
+    to_json_string(&status)
 }
 
 #[tauri::command]
@@ -1622,6 +1697,8 @@ fn main() {
             get_bridge_status,
             regenerate_bridge_token,
             get_bridge_client_snippets,
+            get_agent_defaults_status,
+            apply_agent_defaults_cmd,
             get_cli_install_status,
             install_cli_cmd,
         ])

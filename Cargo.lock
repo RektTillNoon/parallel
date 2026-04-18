@@ -2455,6 +2455,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "notify",
+ "parallel-projectctl",
  "parallel-workflow-core",
  "rand 0.8.5",
  "reqwest 0.12.28",
@@ -2480,6 +2481,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "toml_edit 0.25.11+spec-1.1.0",
  "tracing-subscriber",
 ]
 
@@ -4518,6 +4520,7 @@ dependencies = [
  "indexmap 2.14.0",
  "toml_datetime 1.1.1+spec-1.1.0",
  "toml_parser",
+ "toml_writer",
  "winnow 1.0.1",
 ]
 

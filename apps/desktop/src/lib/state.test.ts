@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { CliInstallStatus, LoadStatePayload } from './types';
 import {
+  describeAgentDefaultsStatus,
   describeCliInstallStatus,
   describeBridgeStatus,
   resolveSelectionState,
@@ -53,9 +54,6 @@ const baseState: LoadStatePayload = {
     pid: null,
     startedAt: null,
     lastError: null,
-    setupStale: false,
-    staleReasons: [],
-    staleClients: [],
   },
 };
 
@@ -150,9 +148,6 @@ describe('resolveSelectionState', () => {
         pid: null,
         startedAt: null,
         lastError: null,
-        setupStale: false,
-        staleReasons: [],
-        staleClients: [],
       },
     } satisfies LoadStatePayload;
 
@@ -250,6 +245,51 @@ describe('cli install status helpers', () => {
       label: 'Installed, PATH update needed',
       detail: 'Add the install directory to your shell path. Profile: /Users/light/.zshrc',
       needsShellSetup: true,
+    });
+  });
+});
+
+describe('agent defaults status helpers', () => {
+  it('surfaces stale agent defaults as update-needed', () => {
+    expect(
+      describeAgentDefaultsStatus({
+        kind: 'claudeDesktop',
+        label: 'Claude Desktop',
+        status: 'stale',
+        reasons: ['stable_projectctl_not_installed'],
+        global: null,
+        repo: null,
+        changedPaths: [],
+      }),
+    ).toEqual({
+      tone: 'caution',
+      label: 'Update needed',
+      detail:
+        'Install the projectctl CLI first so Claude Desktop can use a stable command path.',
+      canInstall: false,
+      canUpdate: true,
+      canReinstall: true,
+    });
+  });
+
+  it('treats installed repo-managed guidance as healthy', () => {
+    expect(
+      describeAgentDefaultsStatus({
+        kind: 'codex',
+        label: 'Codex',
+        status: 'installed',
+        reasons: ['repo_manages_parallel_guidance'],
+        global: null,
+        repo: null,
+        changedPaths: [],
+      }),
+    ).toEqual({
+      tone: 'positive',
+      label: 'Installed',
+      detail: 'This repo already carries its own Parallel guidance.',
+      canInstall: false,
+      canUpdate: false,
+      canReinstall: true,
     });
   });
 });

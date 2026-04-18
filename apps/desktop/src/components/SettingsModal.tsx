@@ -1,7 +1,11 @@
 import type { ChangeEvent, FormEvent } from 'react';
 
-import { describeCliInstallStatus, type BridgeStatusPresentation } from '../lib/state';
-import type { CliInstallStatus } from '../lib/types';
+import {
+  describeAgentDefaultsStatus,
+  describeCliInstallStatus,
+  type BridgeStatusPresentation,
+} from '../lib/state';
+import type { AgentInstallAction, AgentTargetStatus, CliInstallStatus } from '../lib/types';
 
 import CollapsibleSection from './CollapsibleSection';
 
@@ -24,12 +28,15 @@ type SettingsModalProps = {
   bridgeStatus: BridgeStatusPresentation;
   bridgeUrl: string;
   maskedToken: string;
-  setupStale: boolean;
-  staleClientNames: string;
   bridgeLastError: string | null;
   onRestartBridge: () => void;
   onRegenerateBridgeToken: () => void;
   onCopyBridgeSnippet: (kind: string) => void;
+  agentDefaultsOpen: boolean;
+  onToggleAgentDefaults: () => void;
+  agentStatuses: AgentTargetStatus[] | null;
+  agentPendingKind: string | null;
+  onApplyAgentDefaults: (kind: string, action: AgentInstallAction) => void;
   cliOpen: boolean;
   onToggleCli: () => void;
   cliStatus: CliInstallStatus | null;
@@ -57,12 +64,15 @@ export default function SettingsModal({
   bridgeStatus,
   bridgeUrl,
   maskedToken,
-  setupStale,
-  staleClientNames,
   bridgeLastError,
   onRestartBridge,
   onRegenerateBridgeToken,
   onCopyBridgeSnippet,
+  agentDefaultsOpen,
+  onToggleAgentDefaults,
+  agentStatuses,
+  agentPendingKind,
+  onApplyAgentDefaults,
   cliOpen,
   onToggleCli,
   cliStatus,
@@ -180,7 +190,6 @@ export default function SettingsModal({
                 <code className="bridge-url">{maskedToken}</code>
               </div>
             </div>
-            {setupStale ? <div className="bridge-warning">Re-copy setup for: {staleClientNames}</div> : null}
             {bridgeLastError ? <div className="inline-error">{bridgeLastError}</div> : null}
             <div className="bridge-actions">
               <button type="button" onClick={onRestartBridge} disabled={!bridgeEnabled}>
@@ -200,6 +209,65 @@ export default function SettingsModal({
               <button type="button" onClick={() => onCopyBridgeSnippet('claudeDesktop')}>
                 Copy Claude Desktop setup
               </button>
+            </div>
+          </section>
+        </CollapsibleSection>
+        <CollapsibleSection
+          label="Agent Defaults"
+          open={agentDefaultsOpen}
+          onToggle={onToggleAgentDefaults}
+          className="settings-section"
+          count={agentStatuses?.length ?? 0}
+        >
+          <section className="bridge-panel">
+            <div className="panel-header">
+              <div>
+                <h3>Agent Defaults</h3>
+                <p className="muted settings-copy">
+                  Install managed Parallel defaults instead of hand-copying setup after bridge changes.
+                </p>
+              </div>
+            </div>
+            <div className="root-list">
+              {(agentStatuses ?? []).map((status) => {
+                const presentation = describeAgentDefaultsStatus(status);
+                const pending = agentPendingKind === status.kind;
+                return (
+                  <div className="root-row" key={status.kind}>
+                    <div className="stack">
+                      <strong className={`status status-${presentation.tone}`}>{status.label}</strong>
+                      <span>{presentation.label}</span>
+                      {presentation.detail ? <span className="muted">{presentation.detail}</span> : null}
+                    </div>
+                    <div className="bridge-actions">
+                      <button
+                        type="button"
+                        onClick={() => onApplyAgentDefaults(status.kind, 'install')}
+                        disabled={!presentation.canInstall || pending}
+                      >
+                        {pending && presentation.canInstall ? 'Installing…' : 'Install'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onApplyAgentDefaults(status.kind, 'update')}
+                        disabled={!presentation.canUpdate || pending}
+                      >
+                        {pending && presentation.canUpdate ? 'Updating…' : 'Update'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onApplyAgentDefaults(status.kind, 'reinstall')}
+                        disabled={!presentation.canReinstall || pending}
+                      >
+                        {pending && presentation.canReinstall ? 'Reinstalling…' : 'Reinstall'}
+                      </button>
+                      <button type="button" onClick={() => onCopyBridgeSnippet(status.kind)}>
+                        Copy setup
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </section>
         </CollapsibleSection>

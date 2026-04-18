@@ -1,4 +1,10 @@
-import type { BridgeRuntime, CliInstallStatus, LoadStatePayload, ProjectSummary } from './types';
+import type {
+  AgentTargetStatus,
+  BridgeRuntime,
+  CliInstallStatus,
+  LoadStatePayload,
+  ProjectSummary,
+} from './types';
 
 export interface SelectionResolution {
   selectedRoot: string | null;
@@ -16,6 +22,15 @@ export interface CliInstallPresentation {
   label: string;
   detail: string | null;
   needsShellSetup: boolean;
+}
+
+export interface AgentDefaultsPresentation {
+  tone: 'positive' | 'caution' | 'error';
+  label: string;
+  detail: string | null;
+  canInstall: boolean;
+  canUpdate: boolean;
+  canReinstall: boolean;
 }
 
 export function resolveSelectionState(
@@ -120,4 +135,68 @@ export function describeCliInstallStatus(status: CliInstallStatus | null): CliIn
     detail: `Add the install directory to your shell path. Profile: ${status.shellProfile}`,
     needsShellSetup: true,
   };
+}
+
+export function describeAgentDefaultsStatus(status: AgentTargetStatus): AgentDefaultsPresentation {
+  const detail = describeAgentDefaultsReasons(status.reasons);
+  switch (status.status) {
+    case 'installed':
+      return {
+        tone: 'positive',
+        label: 'Installed',
+        detail,
+        canInstall: false,
+        canUpdate: false,
+        canReinstall: true,
+      };
+    case 'stale':
+      return {
+        tone: 'caution',
+        label: 'Update needed',
+        detail,
+        canInstall: false,
+        canUpdate: true,
+        canReinstall: true,
+      };
+    case 'error':
+      return {
+        tone: 'error',
+        label: 'Blocked',
+        detail,
+        canInstall: false,
+        canUpdate: false,
+        canReinstall: false,
+      };
+    default:
+      return {
+        tone: 'caution',
+        label: 'Not installed',
+        detail,
+        canInstall: true,
+        canUpdate: false,
+        canReinstall: true,
+      };
+  }
+}
+
+function describeAgentDefaultsReasons(reasons: string[]) {
+  if (reasons.includes('stable_projectctl_not_installed')) {
+    return 'Install the projectctl CLI first so Claude Desktop can use a stable command path.';
+  }
+  if (reasons.includes('repo_manages_parallel_guidance')) {
+    return 'This repo already carries its own Parallel guidance.';
+  }
+  if (reasons.includes('legacy_local_scope')) {
+    return 'A legacy Claude Code local-scope server exists for this repo and should be promoted to user scope.';
+  }
+  if (reasons.includes('parallel_name_collision')) {
+    return 'A differently named server already points at this Parallel endpoint or command.';
+  }
+  if (reasons.includes('shape_mismatch')) {
+    return 'A Parallel entry already exists but does not match the canonical managed shape.';
+  }
+  if (reasons.includes('managed_block_outdated')) {
+    return 'The managed Parallel instruction block is out of date.';
+  }
+  return reasons[0] ?? null;
 }
