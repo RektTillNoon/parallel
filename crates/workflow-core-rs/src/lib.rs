@@ -10,14 +10,20 @@ mod root_paths;
 mod services;
 mod storage_yaml;
 
+#[cfg(test)]
+fn test_home_lock() -> &'static std::sync::Mutex<()> {
+    static HOME_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    HOME_LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
 pub use index_path::{canonical_index_db_path, canonical_settings_path, CANONICAL_INDEX_DB_FILE};
 pub use models::{
     AcceptedDecision, ActivityEvent, ActivitySource, AppendActivityInput, BoardProjectDetail,
     BoardStepDetail, DecisionProposal, DecisionProposalInput, DecisionProposalStatus,
-    EnsureSessionInput, InitProjectInput, Manifest, MutationActor, Phase, Plan, PlanSyncPhaseInput,
-    PlanSyncStepInput, PlanSyncSubtaskInput, ProjectDetail, ProjectSummary, RuntimePatchInput,
-    RuntimeState, SessionContextInput, SessionStatus, SessionsFile, Step, StepStatus, Subtask,
-    SubtaskStatus, SyncPlanInput, WorkflowSession,
+    DiscoverySource, EnsureSessionInput, InitProjectInput, Manifest, MutationActor, Phase, Plan,
+    PlanSyncPhaseInput, PlanSyncStepInput, PlanSyncSubtaskInput, ProjectDetail, ProjectSummary,
+    RuntimePatchInput, RuntimeState, SessionContextInput, SessionStatus, SessionsFile, Step,
+    StepStatus, Subtask, SubtaskStatus, SyncPlanInput, WorkflowSession,
 };
 pub use read_model::{
     board_project_detail as get_board_project_detail, list_indexed_projects, list_projects,

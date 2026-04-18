@@ -69,6 +69,8 @@ export interface ProjectSummary {
   nextAction: string | null;
   activeBranch: string | null;
   pendingProposalCount: number;
+  discoverySource: 'parallel' | 'codex' | 'claude' | null;
+  discoveryPath: string | null;
 }
 
 export interface Manifest {

@@ -463,6 +463,8 @@ fn build_initialized_project_summary(root: &str) -> Result<ProjectSummary> {
         next_action: Some(runtime.next_action.clone()),
         active_branch: runtime.active_branch.clone(),
         pending_proposal_count: proposals.proposals.len() as i64,
+        discovery_source: Some(crate::DiscoverySource::Parallel),
+        discovery_path: None,
         last_seen_at: Some(now_iso()),
     })
 }
@@ -496,6 +498,8 @@ fn build_uninitialized_project_summary(root: &str) -> Result<ProjectSummary> {
         next_action: Some("Initialize workflow metadata".to_string()),
         active_branch: read_git_branch(root)?,
         pending_proposal_count: 0,
+        discovery_source: None,
+        discovery_path: None,
         last_seen_at: Some(now_iso()),
     })
 }
@@ -522,7 +526,10 @@ fn resolve_project_watched_root(
     }
 
     let root = canonicalize_root(root);
-    Ok(most_specific_watched_root(&root, &store.list_watched_roots()?))
+    Ok(most_specific_watched_root(
+        &root,
+        &store.list_watched_roots()?,
+    ))
 }
 
 pub fn refresh_project_index(
@@ -2056,6 +2063,9 @@ mod tests {
             rusqlite::params![repo_two.display().to_string()],
         )?;
 
+        let _guard = crate::test_home_lock()
+            .lock()
+            .expect("home lock should not poison");
         let prior_home = std::env::var_os("HOME");
         std::env::set_var("HOME", watched_root_dir.path());
         let refreshed_again = list_projects(&roots, &index_db);

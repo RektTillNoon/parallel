@@ -41,6 +41,14 @@ pub enum ActivitySource {
     System,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscoverySource {
+    Parallel,
+    Codex,
+    Claude,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Manifest {
     #[serde(default = "default_manifest_version")]
@@ -231,6 +239,10 @@ pub struct ProjectSummary {
     pub next_action: Option<String>,
     pub active_branch: Option<String>,
     pub pending_proposal_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discovery_source: Option<DiscoverySource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discovery_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_seen_at: Option<String>,
 }

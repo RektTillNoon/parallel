@@ -114,6 +114,33 @@ export function projectCollectionSummary(watchedRootCount: number, projectCount:
 
 export const projectSectionLabel = 'Projects';
 
+export function projectDiscoverySubtitle(project: ProjectSummary) {
+  if (project.initialized || !project.discoverySource || project.discoverySource === 'parallel') {
+    return null;
+  }
+  switch (project.discoverySource) {
+    case 'codex':
+      return 'Codex activity';
+    case 'claude':
+      return 'Claude Code activity';
+    default:
+      return null;
+  }
+}
+
+export function projectSourceLabel(project: ProjectSummary) {
+  if (project.discoverySource === 'parallel' || project.initialized) {
+    return 'Managed by Parallel';
+  }
+  if (project.discoverySource === 'codex') {
+    return 'Codex activity';
+  }
+  if (project.discoverySource === 'claude') {
+    return 'Claude Code activity';
+  }
+  return null;
+}
+
 function compactProjectStatus(status: ProjectSummary['status']) {
   switch (status) {
     case 'uninitialized':
@@ -244,6 +271,9 @@ const Sidebar = memo(function Sidebar({
                 </span>
                 <span className="project-row-state">{compactProjectStatus(project.status)}</span>
               </div>
+              {projectDiscoverySubtitle(project) ? (
+                <span className="project-row-subtitle">{projectDiscoverySubtitle(project)}</span>
+              ) : null}
             </button>
           ))}
         </div>
@@ -813,6 +843,7 @@ export default function App() {
                 detail={selectedBoardProject}
                 currentStepTitle={selectedBoardRow?.stepTitle ?? selectedSummary?.currentStepTitle ?? 'No current step'}
                 currentStepSummary={currentStepSummary}
+                projectSourceLabel={selectedSummary ? projectSourceLabel(selectedSummary) : null}
               />
             </section>
           </>

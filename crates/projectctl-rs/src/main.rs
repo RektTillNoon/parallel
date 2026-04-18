@@ -13,6 +13,7 @@ use parallel_workflow_core::{
     SyncPlanInput,
 };
 use serde_json::{Map, Value};
+use tracing_subscriber::EnvFilter;
 
 type JsonValue = Value;
 
@@ -311,6 +312,7 @@ fn resolve_serve_http_roots(parsed: &ParsedArgs) -> Vec<String> {
 }
 
 fn main() {
+    init_tracing();
     if let Err(error) = run() {
         let argv: Vec<String> = env::args().skip(1).collect();
         let parsed = parse_args(&argv);
@@ -321,6 +323,15 @@ fn main() {
         }
         process::exit(1);
     }
+}
+
+fn init_tracing() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")),
+        )
+        .with_target(false)
+        .try_init();
 }
 
 fn run() -> Result<()> {

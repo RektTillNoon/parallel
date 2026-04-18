@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import {
   choosePrimaryBoardRow,
+  projectDiscoverySubtitle,
   projectCollectionSummary,
   projectSectionLabel,
+  projectSourceLabel,
   resolveBoardSelectionFromRow,
   resolveSelectedSessionId,
 } from './App';
+import type { ProjectSummary } from './lib/types';
 import type { SessionBoardData } from './lib/session-board';
 
 const board: SessionBoardData = {
@@ -86,5 +89,82 @@ describe('project copy helpers', () => {
   it('describes the sidebar collection as projects', () => {
     expect(projectCollectionSummary(2, 5)).toBe('2 roots · 5 projects');
     expect(projectSectionLabel).toBe('Projects');
+  });
+
+  it('shows provenance subtitles only for external-tool candidates', () => {
+    const codexProject = {
+      id: null,
+      name: 'foo',
+      root: '/Users/light/Projects/foo',
+      kind: null,
+      owner: null,
+      tags: [],
+      initialized: false,
+      status: 'uninitialized',
+      stale: false,
+      missing: false,
+      currentStepId: null,
+      currentStepTitle: null,
+      blockerCount: 0,
+      totalStepCount: 0,
+      completedStepCount: 0,
+      activeSessionCount: 0,
+      focusSessionId: null,
+      lastUpdatedAt: null,
+      nextAction: 'Initialize workflow metadata',
+      activeBranch: null,
+      pendingProposalCount: 0,
+      discoverySource: 'codex',
+      discoveryPath: '/Users/light/Projects/foo',
+    } satisfies ProjectSummary;
+    const initializedProject = {
+      ...codexProject,
+      initialized: true,
+      status: 'todo',
+      discoverySource: 'parallel',
+      discoveryPath: null,
+    } satisfies ProjectSummary;
+
+    expect(projectDiscoverySubtitle(codexProject)).toBe('Codex activity');
+    expect(projectDiscoverySubtitle({
+      ...codexProject,
+      discoverySource: 'claude',
+    })).toBe('Claude Code activity');
+    expect(projectDiscoverySubtitle({
+      ...codexProject,
+      discoverySource: null,
+      discoveryPath: null,
+    })).toBeNull();
+    expect(projectDiscoverySubtitle(initializedProject)).toBeNull();
+  });
+
+  it('uses project language in the selected-project source label', () => {
+    expect(
+      projectSourceLabel({
+        id: 'parallel-1',
+        name: 'parallel',
+        root: '/Users/light/Projects/parallel',
+        kind: 'software',
+        owner: 'light',
+        tags: [],
+        initialized: true,
+        status: 'in_progress',
+        stale: false,
+        missing: false,
+        currentStepId: null,
+        currentStepTitle: null,
+        blockerCount: 0,
+        totalStepCount: 1,
+        completedStepCount: 0,
+        activeSessionCount: 1,
+        focusSessionId: null,
+        lastUpdatedAt: null,
+        nextAction: null,
+        activeBranch: 'main',
+        pendingProposalCount: 0,
+        discoverySource: 'parallel',
+        discoveryPath: null,
+      }),
+    ).toBe('Managed by Parallel');
   });
 });

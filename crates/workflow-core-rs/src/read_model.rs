@@ -11,7 +11,8 @@ use crate::{
     discovery::discover_project_roots,
     index_store::IndexStore,
     models::{
-        BoardProjectDetail, BoardStepDetail, ProjectIndexRecord, ProjectSummary, SessionStatus,
+        BoardProjectDetail, BoardStepDetail, DiscoverySource, ProjectIndexRecord, ProjectSummary,
+        SessionStatus,
     },
     root_paths::{canonicalize_root, most_specific_watched_root, normalize_roots},
     services::{
@@ -113,6 +114,8 @@ fn build_uninitialized_summary(root: &str) -> Result<ProjectSummary> {
         next_action: Some("Initialize workflow metadata".to_string()),
         active_branch: read_git_branch(&root)?,
         pending_proposal_count: 0,
+        discovery_source: None,
+        discovery_path: None,
         last_seen_at: Some(now_iso()),
     })
 }
@@ -153,6 +156,8 @@ fn build_initialized_summary(root: &str) -> Result<ProjectSummary> {
         next_action: Some(detail.runtime.next_action.clone()),
         active_branch: detail.runtime.active_branch.clone(),
         pending_proposal_count: detail.pending_proposals.len() as i64,
+        discovery_source: Some(DiscoverySource::Parallel),
+        discovery_path: None,
         last_seen_at: Some(now_iso()),
     })
 }
@@ -188,7 +193,10 @@ pub fn project_summary(root: &str) -> Result<ProjectSummary> {
 
 fn refreshed_indexed_summary(record: ProjectIndexRecord) -> Result<ProjectSummary> {
     if path_exists(&record.summary.root) {
-        return project_summary(&record.summary.root);
+        let mut summary = project_summary(&record.summary.root)?;
+        summary.discovery_source = record.summary.discovery_source;
+        summary.discovery_path = record.summary.discovery_path;
+        return Ok(summary);
     }
 
     let mut summary = record.summary;
@@ -275,10 +283,11 @@ pub fn list_projects(roots: &[String], index_db_path: &str) -> Result<Vec<Projec
         .filter(|record| record.summary.initialized)
         .map(|record| (record.summary.root.clone(), record))
         .collect::<HashMap<_, _>>();
-    let discovered_roots = discover_project_roots(&roots, &store)?;
+    let discovered_projects = discover_project_roots(&roots, &store)?;
 
-    for repo_root in &discovered_roots {
-        let summary = if let Some(existing_record) = initialized_index.get(repo_root) {
+    for discovered in &discovered_projects {
+        let repo_root = &discovered.root;
+        let mut summary = if let Some(existing_record) = initialized_index.get(repo_root) {
             if !path_exists(repo_root) {
                 let mut summary = existing_record.summary.clone();
                 summary.missing = true;
@@ -290,6 +299,8 @@ pub fn list_projects(roots: &[String], index_db_path: &str) -> Result<Vec<Projec
         } else {
             project_summary(repo_root)?
         };
+        summary.discovery_source = Some(discovered.discovery_source);
+        summary.discovery_path = discovered.discovery_path.clone();
         let watched_root = most_specific_watched_root(repo_root, &roots);
         store.sync_project(&ProjectIndexRecord {
             summary,
@@ -297,7 +308,13 @@ pub fn list_projects(roots: &[String], index_db_path: &str) -> Result<Vec<Projec
         })?;
     }
 
-    store.mark_missing_projects(&roots, &discovered_roots)?;
+    store.mark_missing_projects(
+        &roots,
+        &discovered_projects
+            .iter()
+            .map(|project| project.root.clone())
+            .collect::<Vec<_>>(),
+    )?;
     let scanned_at = now_iso();
     for watched_root in &roots {
         store.record_watched_root_scan(watched_root, &scanned_at)?;
@@ -326,9 +343,24 @@ mod tests {
     use anyhow::Result;
     use tempfile::tempdir;
 
-    use crate::{ActivitySource, InitProjectInput, index_store::IndexStore};
+    use crate::{index_store::IndexStore, ActivitySource, InitProjectInput};
 
     use super::*;
+
+    fn with_home<T>(home: &std::path::Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
+        let _guard = crate::test_home_lock()
+            .lock()
+            .expect("home lock should not poison");
+        let prior_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", home);
+        let result = f();
+        if let Some(value) = prior_home {
+            std::env::set_var("HOME", value);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        result
+    }
 
     #[test]
     fn memoized_summary_invalidates_when_runtime_changes() -> Result<()> {
@@ -392,20 +424,14 @@ mod tests {
         let hidden_project = watched_root.join(".hidden-project");
         fs::create_dir_all(&hidden_project)?;
 
-        let prior_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", temp.path());
         let index_db = temp
             .path()
             .join("workflow-index.sqlite")
             .display()
             .to_string();
-        let summaries = list_projects(&[watched_root.display().to_string()], &index_db);
-        if let Some(value) = prior_home {
-            std::env::set_var("HOME", value);
-        } else {
-            std::env::remove_var("HOME");
-        }
-        let summaries = summaries?;
+        let summaries = with_home(temp.path(), || {
+            list_projects(&[watched_root.display().to_string()], &index_db)
+        })?;
 
         assert_eq!(summaries.len(), 1);
         assert!(summaries
@@ -463,11 +489,7 @@ mod tests {
         let project_root = watched_root.join("group").join("parallel-project");
         fs::create_dir_all(&project_root)?;
 
-        let seed_index_db = temp
-            .path()
-            .join("seed-index.sqlite")
-            .display()
-            .to_string();
+        let seed_index_db = temp.path().join("seed-index.sqlite").display().to_string();
         crate::init_project(InitProjectInput {
             root: project_root.display().to_string(),
             actor: "tester".to_string(),
@@ -487,7 +509,10 @@ mod tests {
 
         let summaries = list_projects(&[watched_root.display().to_string()], &refresh_index_db)?;
         assert_eq!(summaries.len(), 1);
-        assert_eq!(summaries[0].root, fs::canonicalize(&project_root)?.to_string_lossy());
+        assert_eq!(
+            summaries[0].root,
+            fs::canonicalize(&project_root)?.to_string_lossy()
+        );
         assert!(summaries[0].initialized);
         Ok(())
     }
@@ -502,11 +527,7 @@ mod tests {
         let project_root = nested_watched_root.join("parallel-project");
         fs::create_dir_all(&project_root)?;
 
-        let seed_index_db = temp
-            .path()
-            .join("seed-index.sqlite")
-            .display()
-            .to_string();
+        let seed_index_db = temp.path().join("seed-index.sqlite").display().to_string();
         crate::init_project(InitProjectInput {
             root: project_root.display().to_string(),
             actor: "tester".to_string(),
@@ -532,9 +553,110 @@ mod tests {
         let store = IndexStore::new(refresh_index_db)?;
 
         assert_eq!(
-            store.project_watched_root(fs::canonicalize(&project_root)?.to_string_lossy().as_ref())?,
-            Some(fs::canonicalize(&nested_watched_root)?.to_string_lossy().into_owned())
+            store.project_watched_root(
+                fs::canonicalize(&project_root)?.to_string_lossy().as_ref()
+            )?,
+            Some(
+                fs::canonicalize(&nested_watched_root)?
+                    .to_string_lossy()
+                    .into_owned()
+            )
         );
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_prefers_codex_provenance_over_claude_for_the_same_surfaced_root() -> Result<()> {
+        let temp = tempdir()?;
+        let watched_root = temp.path().join("watched");
+        let project_root = watched_root.join("foo");
+        let claude_nested_root = project_root.join("bar");
+        fs::create_dir_all(&claude_nested_root)?;
+
+        let codex_home = temp.path().join(".codex");
+        fs::create_dir_all(&codex_home)?;
+        let codex_db = codex_home.join("state_7.sqlite");
+        let codex = rusqlite::Connection::open(&codex_db)?;
+        codex.execute_batch(
+            r#"
+            CREATE TABLE threads (
+              cwd TEXT,
+              archived INTEGER NOT NULL DEFAULT 0
+            );
+            "#,
+        )?;
+        codex.execute(
+            "INSERT INTO threads (cwd, archived) VALUES (?1, 0)",
+            rusqlite::params![project_root.display().to_string()],
+        )?;
+
+        let claude_projects_root = temp.path().join(".claude").join("projects");
+        fs::create_dir_all(claude_projects_root.join("foo"))?;
+        fs::write(
+            claude_projects_root.join("foo").join("session.jsonl"),
+            format!(r#"{{"cwd":"{}"}}"#, claude_nested_root.display()),
+        )?;
+
+        let index_db = temp.path().join("workflow-index.sqlite");
+        let summaries = with_home(temp.path(), || {
+            list_projects(
+                &[watched_root.display().to_string()],
+                index_db.to_string_lossy().as_ref(),
+            )
+        })?;
+
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(
+            summaries[0].discovery_source,
+            Some(crate::DiscoverySource::Codex)
+        );
+        assert_eq!(summaries[0].discovery_path, None);
+        Ok(())
+    }
+
+    #[test]
+    fn indexed_snapshot_round_trips_provenance_without_refresh() -> Result<()> {
+        let temp = tempdir()?;
+        let watched_root = temp.path().join("watched");
+        let project_root = watched_root.join("foo");
+        fs::create_dir_all(&project_root)?;
+
+        let codex_home = temp.path().join(".codex");
+        fs::create_dir_all(&codex_home)?;
+        let codex_db = codex_home.join("state_5.sqlite");
+        let codex = rusqlite::Connection::open(&codex_db)?;
+        codex.execute_batch(
+            r#"
+            CREATE TABLE threads (
+              cwd TEXT,
+              archived INTEGER NOT NULL DEFAULT 0
+            );
+            "#,
+        )?;
+        codex.execute(
+            "INSERT INTO threads (cwd, archived) VALUES (?1, 0)",
+            rusqlite::params![project_root.display().to_string()],
+        )?;
+
+        let index_db = temp.path().join("workflow-index.sqlite");
+        with_home(temp.path(), || {
+            list_projects(
+                &[watched_root.display().to_string()],
+                index_db.to_string_lossy().as_ref(),
+            )
+        })?;
+
+        let indexed = list_indexed_projects(
+            &[watched_root.display().to_string()],
+            index_db.to_string_lossy().as_ref(),
+        )?;
+
+        assert_eq!(indexed.len(), 1);
+        assert_eq!(
+            indexed[0].discovery_source,
+            Some(crate::DiscoverySource::Codex)
+        );
+        assert_eq!(indexed[0].discovery_path, None);
         Ok(())
     }
 }

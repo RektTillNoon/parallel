@@ -32,6 +32,8 @@ const loadState: LoadStatePayload = {
       nextAction: 'Write the initial problem statement and success criteria.',
       activeBranch: 'main',
       pendingProposalCount: 0,
+      discoverySource: 'parallel',
+      discoveryPath: null,
     },
     {
       id: 'notes-1',
@@ -55,6 +57,8 @@ const loadState: LoadStatePayload = {
       nextAction: 'Resolve the blocker before drafting the outline.',
       activeBranch: 'main',
       pendingProposalCount: 0,
+      discoverySource: 'parallel',
+      discoveryPath: null,
     },
   ],
   boardProjects: [],

@@ -3,10 +3,60 @@ use std::{fs, path::Path};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::models::{ProjectIndexRecord, ProjectSummary};
+use crate::models::{DiscoverySource, ProjectIndexRecord, ProjectSummary};
 
 pub struct IndexStore {
     db_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaudeCacheEntry {
+    pub path: String,
+    pub modified_ms: u128,
+    pub size: u64,
+    pub cwd: Option<String>,
+}
+
+fn encode_discovery_source(source: Option<DiscoverySource>) -> Option<&'static str> {
+    match source {
+        Some(DiscoverySource::Parallel) => Some("parallel"),
+        Some(DiscoverySource::Codex) => Some("codex"),
+        Some(DiscoverySource::Claude) => Some("claude"),
+        None => None,
+    }
+}
+
+fn decode_discovery_source(source: Option<String>) -> Option<DiscoverySource> {
+    match source.as_deref() {
+        Some("parallel") => Some(DiscoverySource::Parallel),
+        Some("codex") => Some(DiscoverySource::Codex),
+        Some("claude") => Some(DiscoverySource::Claude),
+        _ => None,
+    }
+}
+
+fn add_column_if_missing(
+    conn: &Connection,
+    columns: &[String],
+    name: &str,
+    sql_type: &str,
+) -> Result<()> {
+    if columns.iter().any(|column| column == name) {
+        return Ok(());
+    }
+
+    match conn.execute(
+        &format!("ALTER TABLE projects ADD COLUMN {name} {sql_type}"),
+        [],
+    ) {
+        Ok(_) => Ok(()),
+        Err(rusqlite::Error::SqliteFailure(_, Some(message)))
+            if message.contains("duplicate column name") =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 impl IndexStore {
@@ -55,6 +105,14 @@ impl IndexStore {
               last_seen_at TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS claude_cwd_cache (
+              path TEXT PRIMARY KEY,
+              modified_ms INTEGER NOT NULL,
+              size INTEGER NOT NULL,
+              cwd TEXT,
+              updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS watched_root_scans (
               watched_root TEXT PRIMARY KEY,
               last_scanned_at TEXT NOT NULL
@@ -66,6 +124,12 @@ impl IndexStore {
             );
             "#,
         )?;
+        let mut stmt = conn.prepare("PRAGMA table_info(projects)")?;
+        let columns = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        add_column_if_missing(&conn, &columns, "discovery_source", "TEXT")?;
+        add_column_if_missing(&conn, &columns, "discovery_path", "TEXT")?;
         Ok(())
     }
 
@@ -77,8 +141,8 @@ impl IndexStore {
               root, watched_root, id, name, kind, owner, tags_json, initialized, status, stale, missing,
               current_step_id, current_step_title, blocker_count, total_step_count, completed_step_count,
               active_session_count, focus_session_id, last_updated_at, next_action, active_branch,
-              pending_proposal_count, last_seen_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
+              pending_proposal_count, discovery_source, discovery_path, last_seen_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
             ON CONFLICT(root) DO UPDATE SET
               watched_root = excluded.watched_root,
               id = excluded.id,
@@ -101,6 +165,8 @@ impl IndexStore {
               next_action = excluded.next_action,
               active_branch = excluded.active_branch,
               pending_proposal_count = excluded.pending_proposal_count,
+              discovery_source = excluded.discovery_source,
+              discovery_path = excluded.discovery_path,
               last_seen_at = excluded.last_seen_at
             "#,
             params![
@@ -126,6 +192,8 @@ impl IndexStore {
                 record.summary.next_action,
                 record.summary.active_branch,
                 record.summary.pending_proposal_count,
+                encode_discovery_source(record.summary.discovery_source),
+                record.summary.discovery_path,
                 record.summary.last_seen_at,
             ],
         )?;
@@ -332,6 +400,8 @@ impl IndexStore {
                 next_action: row.get("next_action")?,
                 active_branch: row.get("active_branch")?,
                 pending_proposal_count: row.get("pending_proposal_count")?,
+                discovery_source: decode_discovery_source(row.get("discovery_source")?),
+                discovery_path: row.get("discovery_path")?,
                 last_seen_at: row.get("last_seen_at")?,
             };
             Ok(ProjectIndexRecord {
@@ -345,6 +415,76 @@ impl IndexStore {
             out.push(row?);
         }
         Ok(out)
+    }
+
+    pub fn claude_cache_entry(&self, path: &str) -> Result<Option<ClaudeCacheEntry>> {
+        let conn = self.connection()?;
+        conn.query_row(
+            "SELECT path, modified_ms, size, cwd FROM claude_cwd_cache WHERE path = ?1",
+            params![path],
+            |row| {
+                Ok(ClaudeCacheEntry {
+                    path: row.get("path")?,
+                    modified_ms: row.get::<_, i64>("modified_ms")? as u128,
+                    size: row.get::<_, i64>("size")? as u64,
+                    cwd: row.get("cwd")?,
+                })
+            },
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub fn upsert_claude_cache_entry(
+        &self,
+        path: &str,
+        modified_ms: u128,
+        size: u64,
+        cwd: Option<String>,
+    ) -> Result<()> {
+        let conn = self.connection()?;
+        conn.execute(
+            r#"
+            INSERT INTO claude_cwd_cache (path, modified_ms, size, cwd, updated_at)
+            VALUES (?1, ?2, ?3, ?4, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            ON CONFLICT(path) DO UPDATE SET
+              modified_ms = excluded.modified_ms,
+              size = excluded.size,
+              cwd = excluded.cwd,
+              updated_at = excluded.updated_at
+            "#,
+            params![path, modified_ms as i64, size as i64, cwd],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_claude_cache_entries(&self) -> Result<Vec<ClaudeCacheEntry>> {
+        let conn = self.connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT path, modified_ms, size, cwd FROM claude_cwd_cache ORDER BY path COLLATE NOCASE",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(ClaudeCacheEntry {
+                path: row.get("path")?,
+                modified_ms: row.get::<_, i64>("modified_ms")? as u128,
+                size: row.get::<_, i64>("size")? as u64,
+                cwd: row.get("cwd")?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn delete_claude_cache_entry(&self, path: &str) -> Result<()> {
+        let conn = self.connection()?;
+        conn.execute(
+            "DELETE FROM claude_cwd_cache WHERE path = ?1",
+            params![path],
+        )?;
+        Ok(())
     }
 
     #[cfg(test)]
@@ -362,6 +502,96 @@ impl IndexStore {
             "#,
             params![watched_root, watched_root],
         )?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs,
+        sync::{Arc, Barrier},
+        thread,
+    };
+
+    use anyhow::Result;
+    use tempfile::tempdir;
+
+    use super::IndexStore;
+
+    #[test]
+    fn ensure_schema_is_idempotent_for_discovery_columns() -> Result<()> {
+        let temp = tempdir()?;
+        let db_path = temp.path().join("index.sqlite");
+
+        let _ = IndexStore::new(db_path.display().to_string())?;
+        let _ = IndexStore::new(db_path.display().to_string())?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn claude_cache_survives_store_recreation() -> Result<()> {
+        let temp = tempdir()?;
+        let db_path = temp.path().join("index.sqlite");
+        let jsonl_path = fs::canonicalize(temp.path())?
+            .join("session.jsonl")
+            .to_string_lossy()
+            .into_owned();
+
+        let store = IndexStore::new(db_path.display().to_string())?;
+        store.upsert_claude_cache_entry(&jsonl_path, 11, 22, Some("/tmp/project".to_string()))?;
+
+        let reopened = IndexStore::new(db_path.display().to_string())?;
+        let entry = reopened.claude_cache_entry(&jsonl_path)?;
+
+        assert_eq!(
+            entry.map(|entry| (entry.modified_ms, entry.size, entry.cwd)),
+            Some((11, 22, Some("/tmp/project".to_string())))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_claude_cache_writes_leave_one_valid_row() -> Result<()> {
+        let temp = tempdir()?;
+        let db_path = temp.path().join("index.sqlite");
+        let jsonl_path = temp.path().join("session.jsonl");
+        fs::write(&jsonl_path, "{}")?;
+        let jsonl_path = fs::canonicalize(&jsonl_path)?
+            .to_string_lossy()
+            .into_owned();
+
+        let db_path_one = db_path.display().to_string();
+        let db_path_two = db_path.display().to_string();
+        let path_one = jsonl_path.clone();
+        let path_two = jsonl_path.clone();
+        let barrier = Arc::new(Barrier::new(2));
+
+        let worker_one_barrier = barrier.clone();
+        let worker_one = thread::spawn(move || -> Result<()> {
+            let store = IndexStore::new(db_path_one)?;
+            worker_one_barrier.wait();
+            store.upsert_claude_cache_entry(&path_one, 10, 100, Some("/tmp/one".to_string()))
+        });
+        let worker_two_barrier = barrier.clone();
+        let worker_two = thread::spawn(move || -> Result<()> {
+            let store = IndexStore::new(db_path_two)?;
+            worker_two_barrier.wait();
+            store.upsert_claude_cache_entry(&path_two, 20, 200, Some("/tmp/two".to_string()))
+        });
+
+        worker_one.join().expect("worker one should join")?;
+        worker_two.join().expect("worker two should join")?;
+
+        let store = IndexStore::new(db_path.display().to_string())?;
+        let rows = store.list_claude_cache_entries()?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].path, jsonl_path);
+        assert!(matches!(
+            (rows[0].modified_ms, rows[0].size),
+            (10, 100) | (20, 200)
+        ));
         Ok(())
     }
 }

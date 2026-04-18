@@ -37,6 +37,7 @@ use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
     ShellExt,
 };
+use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -1564,6 +1565,7 @@ fn build_tray(app: &AppHandle, state: &AppState) -> Result<(), String> {
 }
 
 fn main() {
+    init_tracing();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
@@ -1636,6 +1638,15 @@ fn main() {
             }
         }
     });
+}
+
+fn init_tracing() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")),
+        )
+        .with_target(false)
+        .try_init();
 }
 
 #[cfg(test)]
@@ -1989,10 +2000,31 @@ mod tests {
             std::env::remove_var("HOME");
         }
         assert_eq!(refreshed_again.projects.len(), 2);
+        let discovered_repo_two = refreshed_again
+            .projects
+            .iter()
+            .find(|project| project.root.ends_with("/watched-root/repo-two"))
+            .expect("refreshed payload should include repo two");
+        assert_eq!(
+            discovered_repo_two.discovery_source,
+            Some(parallel_workflow_core::DiscoverySource::Codex)
+        );
+        assert_eq!(discovered_repo_two.discovery_path, None);
         assert!(refreshed_again
             .projects
             .iter()
             .any(|project| project.root.ends_with("/watched-root/repo-two")));
+        let snapshot_after_refresh = build_snapshot_payload(&state, &settings)
+            .expect("snapshot should reuse indexed provenance");
+        let snapshot_repo_two = snapshot_after_refresh
+            .projects
+            .iter()
+            .find(|project| project.root.ends_with("/watched-root/repo-two"))
+            .expect("snapshot should retain repo two");
+        assert_eq!(
+            snapshot_repo_two.discovery_source,
+            Some(parallel_workflow_core::DiscoverySource::Codex)
+        );
         assert_eq!(refreshed_again.board_projects.len(), 1);
     }
 

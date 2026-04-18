@@ -46,6 +46,7 @@ type ContextRailProps = {
   detail: BoardProjectDetail | null;
   currentStepTitle: string;
   currentStepSummary: string;
+  projectSourceLabel: string | null;
 };
 
 export default memo(function ContextRail({
@@ -53,6 +54,7 @@ export default memo(function ContextRail({
   detail,
   currentStepTitle,
   currentStepSummary,
+  projectSourceLabel,
 }: ContextRailProps) {
   if (!project || !detail) {
     return null;
@@ -63,9 +65,13 @@ export default memo(function ContextRail({
   return (
     <aside className="context-rail">
       <section>
-        <p className="context-rail-label">Selected repo</p>
+        <p className="context-rail-label">Selected project</p>
         <h2>{project.name}</h2>
         <p>{project.root}</p>
+        {projectSourceLabel ? <p>{projectSourceLabel}</p> : null}
+        {project.discoveryPath && project.discoveryPath !== project.root ? (
+          <p>{project.discoveryPath}</p>
+        ) : null}
       </section>
       <section>
         <p className="context-rail-label">Current step</p>
