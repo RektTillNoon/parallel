@@ -33,3 +33,14 @@ pub(crate) fn root_belongs_to_watched_root(root: &str, watched_root: &str) -> bo
     root == watched_root
         || root.starts_with(&format!("{watched_root}{}", std::path::MAIN_SEPARATOR))
 }
+
+pub(crate) fn most_specific_watched_root(root: &str, watched_roots: &[String]) -> String {
+    let root = canonicalize_root(root);
+    let mut candidates = watched_roots
+        .iter()
+        .filter(|candidate| root_belongs_to_watched_root(&root, candidate))
+        .cloned()
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|candidate| candidate.len());
+    candidates.pop().unwrap_or(root)
+}

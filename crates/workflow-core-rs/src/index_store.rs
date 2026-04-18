@@ -143,10 +143,17 @@ impl IndexStore {
         let conn = self.connection()?;
         for candidate in candidates {
             if !present.contains(candidate.summary.root.as_str()) {
-                conn.execute(
-                    "UPDATE projects SET stale = 1, missing = 1 WHERE root = ?1",
-                    params![candidate.summary.root],
-                )?;
+                if candidate.summary.initialized {
+                    conn.execute(
+                        "UPDATE projects SET stale = 1, missing = 1 WHERE root = ?1",
+                        params![candidate.summary.root],
+                    )?;
+                } else {
+                    conn.execute(
+                        "DELETE FROM projects WHERE root = ?1",
+                        params![candidate.summary.root],
+                    )?;
+                }
             }
         }
         Ok(())

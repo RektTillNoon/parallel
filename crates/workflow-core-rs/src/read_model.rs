@@ -13,7 +13,7 @@ use crate::{
     models::{
         BoardProjectDetail, BoardStepDetail, ProjectIndexRecord, ProjectSummary, SessionStatus,
     },
-    root_paths::{canonicalize_root, normalize_roots, root_belongs_to_watched_root},
+    root_paths::{canonicalize_root, most_specific_watched_root, normalize_roots},
     services::{
         determine_project_stale, find_current_step_title, get_plan_progress, get_project,
         locate_step,
@@ -268,16 +268,29 @@ pub fn board_project_detail(root: &str) -> Result<BoardProjectDetail> {
 
 pub fn list_projects(roots: &[String], index_db_path: &str) -> Result<Vec<ProjectSummary>> {
     let roots = normalize_roots(roots.iter().cloned());
-    let discovered_roots = discover_project_roots(&roots)?;
     let store = IndexStore::new(index_db_path.to_string())?;
+    let indexed_projects = store.list_projects(&roots)?;
+    let initialized_index = indexed_projects
+        .into_iter()
+        .filter(|record| record.summary.initialized)
+        .map(|record| (record.summary.root.clone(), record))
+        .collect::<HashMap<_, _>>();
+    let discovered_roots = discover_project_roots(&roots, &store)?;
 
     for repo_root in &discovered_roots {
-        let summary = project_summary(repo_root)?;
-        let watched_root = roots
-            .iter()
-            .find(|candidate| root_belongs_to_watched_root(repo_root, candidate))
-            .cloned()
-            .unwrap_or_else(|| repo_root.to_string());
+        let summary = if let Some(existing_record) = initialized_index.get(repo_root) {
+            if !path_exists(repo_root) {
+                let mut summary = existing_record.summary.clone();
+                summary.missing = true;
+                summary.stale = true;
+                summary
+            } else {
+                project_summary(repo_root)?
+            }
+        } else {
+            project_summary(repo_root)?
+        };
+        let watched_root = most_specific_watched_root(repo_root, &roots);
         store.sync_project(&ProjectIndexRecord {
             summary,
             watched_root,
@@ -313,7 +326,7 @@ mod tests {
     use anyhow::Result;
     use tempfile::tempdir;
 
-    use crate::{ActivitySource, InitProjectInput};
+    use crate::{ActivitySource, InitProjectInput, index_store::IndexStore};
 
     use super::*;
 
@@ -351,20 +364,64 @@ mod tests {
     }
 
     #[test]
-    fn refresh_discovers_visible_plain_directories_and_skips_hidden_ones() -> Result<()> {
+    fn refresh_discovers_tool_backed_projects_and_skips_hidden_ones() -> Result<()> {
         let temp = tempdir()?;
         let watched_root = temp.path().join("watched");
         fs::create_dir_all(&watched_root)?;
 
-        let plain_project = watched_root.join("plain-project");
-        fs::create_dir_all(&plain_project)?;
-
         let git_project = watched_root.join("git-project");
-        fs::create_dir_all(git_project.join(".git"))?;
-        fs::write(git_project.join(".git/HEAD"), "ref: refs/heads/main\n")?;
+        fs::create_dir_all(git_project.join("nested"))?;
+
+        let codex_home = temp.path().join(".codex");
+        fs::create_dir_all(&codex_home)?;
+        let codex_db = codex_home.join("state_7.sqlite");
+        let connection = rusqlite::Connection::open(&codex_db)?;
+        connection.execute_batch(
+            r#"
+            CREATE TABLE threads (
+              cwd TEXT,
+              archived INTEGER NOT NULL DEFAULT 0
+            );
+            "#,
+        )?;
+        connection.execute(
+            "INSERT INTO threads (cwd, archived) VALUES (?1, 0)",
+            rusqlite::params![git_project.join("nested").display().to_string()],
+        )?;
 
         let hidden_project = watched_root.join(".hidden-project");
         fs::create_dir_all(&hidden_project)?;
+
+        let prior_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", temp.path());
+        let index_db = temp
+            .path()
+            .join("workflow-index.sqlite")
+            .display()
+            .to_string();
+        let summaries = list_projects(&[watched_root.display().to_string()], &index_db);
+        if let Some(value) = prior_home {
+            std::env::set_var("HOME", value);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        let summaries = summaries?;
+
+        assert_eq!(summaries.len(), 1);
+        assert!(summaries
+            .iter()
+            .any(|summary| summary.root.ends_with("/watched/git-project")));
+        assert!(!summaries
+            .iter()
+            .any(|summary| summary.root.ends_with("/watched/.hidden-project")));
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_ignores_plain_directories_without_parallel_or_tool_backing() -> Result<()> {
+        let temp = tempdir()?;
+        let watched_root = temp.path().join("watched");
+        fs::create_dir_all(watched_root.join("plain-project"))?;
 
         let index_db = temp
             .path()
@@ -373,21 +430,111 @@ mod tests {
             .to_string();
 
         let summaries = list_projects(&[watched_root.display().to_string()], &index_db)?;
+        assert!(summaries.is_empty());
+        Ok(())
+    }
 
-        assert_eq!(summaries.len(), 2);
-        assert!(summaries
-            .iter()
-            .any(|summary| summary.root.ends_with("/watched/plain-project")));
-        assert!(summaries
-            .iter()
-            .any(|summary| summary.root.ends_with("/watched/git-project")));
-        assert!(!summaries
-            .iter()
-            .any(|summary| summary.root.ends_with("/watched/.hidden-project")));
-        assert!(summaries
-            .iter()
-            .find(|summary| summary.root.ends_with("/watched/plain-project"))
-            .is_some_and(|summary| !summary.initialized && summary.active_branch.is_none()));
+    #[test]
+    fn refresh_prunes_uninitialized_candidates_that_are_no_longer_backed() -> Result<()> {
+        let temp = tempdir()?;
+        let watched_root = temp.path().join("watched");
+        fs::create_dir_all(&watched_root)?;
+
+        let stale_candidate = watched_root.join("plain-project");
+        let index_db = temp
+            .path()
+            .join("workflow-index.sqlite")
+            .display()
+            .to_string();
+        let store = IndexStore::new(index_db.clone())?;
+        store.sync_project_root_seed(stale_candidate.display().to_string().as_str())?;
+
+        let summaries = list_projects(&[watched_root.display().to_string()], &index_db)?;
+        assert!(summaries.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_backfills_nested_initialized_projects_when_index_has_none() -> Result<()> {
+        let temp = tempdir()?;
+        let watched_root = temp.path().join("watched");
+        fs::create_dir_all(&watched_root)?;
+
+        let project_root = watched_root.join("group").join("parallel-project");
+        fs::create_dir_all(&project_root)?;
+
+        let seed_index_db = temp
+            .path()
+            .join("seed-index.sqlite")
+            .display()
+            .to_string();
+        crate::init_project(InitProjectInput {
+            root: project_root.display().to_string(),
+            actor: "tester".to_string(),
+            source: ActivitySource::Cli,
+            name: Some("Parallel Project".to_string()),
+            kind: None,
+            owner: None,
+            tags: None,
+            index_db_path: seed_index_db,
+        })?;
+
+        let refresh_index_db = temp
+            .path()
+            .join("refresh-index.sqlite")
+            .display()
+            .to_string();
+
+        let summaries = list_projects(&[watched_root.display().to_string()], &refresh_index_db)?;
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].root, fs::canonicalize(&project_root)?.to_string_lossy());
+        assert!(summaries[0].initialized);
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_assigns_backfilled_projects_to_the_most_specific_watched_root() -> Result<()> {
+        let temp = tempdir()?;
+        let watched_root = temp.path().join("watched");
+        let nested_watched_root = watched_root.join("group");
+        fs::create_dir_all(&nested_watched_root)?;
+
+        let project_root = nested_watched_root.join("parallel-project");
+        fs::create_dir_all(&project_root)?;
+
+        let seed_index_db = temp
+            .path()
+            .join("seed-index.sqlite")
+            .display()
+            .to_string();
+        crate::init_project(InitProjectInput {
+            root: project_root.display().to_string(),
+            actor: "tester".to_string(),
+            source: ActivitySource::Cli,
+            name: Some("Parallel Project".to_string()),
+            kind: None,
+            owner: None,
+            tags: None,
+            index_db_path: seed_index_db,
+        })?;
+
+        let refresh_index_db = temp
+            .path()
+            .join("refresh-index.sqlite")
+            .display()
+            .to_string();
+        let roots = vec![
+            watched_root.display().to_string(),
+            nested_watched_root.display().to_string(),
+        ];
+
+        let _ = list_projects(&roots, &refresh_index_db)?;
+        let store = IndexStore::new(refresh_index_db)?;
+
+        assert_eq!(
+            store.project_watched_root(fs::canonicalize(&project_root)?.to_string_lossy().as_ref())?,
+            Some(fs::canonicalize(&nested_watched_root)?.to_string_lossy().into_owned())
+        );
         Ok(())
     }
 }

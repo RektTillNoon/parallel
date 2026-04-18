@@ -108,6 +108,12 @@ export function resolveBoardSelectionFromRow(selectedRow: SessionBoardRow | null
   };
 }
 
+export function projectCollectionSummary(watchedRootCount: number, projectCount: number) {
+  return `${watchedRootCount} roots · ${projectCount} projects`;
+}
+
+export const projectSectionLabel = 'Projects';
+
 function compactProjectStatus(status: ProjectSummary['status']) {
   switch (status) {
     case 'uninitialized':
@@ -210,11 +216,11 @@ const Sidebar = memo(function Sidebar({
           </div>
         </div>
         <p className="sidebar-meta">
-          {watchedRootCount} roots · {projects.length} repos
+          {projectCollectionSummary(watchedRootCount, projects.length)}
         </p>
       </div>
       <CollapsibleSection
-        label="Repos"
+        label={projectSectionLabel}
         open={reposOpen}
         onToggle={onToggleRepos}
         className="sidebar-block repos-toggle"

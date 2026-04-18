@@ -1958,8 +1958,36 @@ mod tests {
             .root
             .ends_with("/watched-root/repo-one"));
 
+        let codex_home = base.join(".codex");
+        fs::create_dir_all(&codex_home).expect("codex home should create");
+        let codex_db = codex_home.join("state_11.sqlite");
+        let connection = rusqlite::Connection::open(&codex_db).expect("codex db should open");
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE threads (
+                  cwd TEXT,
+                  archived INTEGER NOT NULL DEFAULT 0
+                );
+                "#,
+            )
+            .expect("codex schema should create");
+        connection
+            .execute(
+                "INSERT INTO threads (cwd, archived) VALUES (?1, 0)",
+                rusqlite::params![repo_two.display().to_string()],
+            )
+            .expect("codex thread should insert");
+
+        let prior_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", &base);
         let refreshed_again =
             build_refreshed_payload(&state, &settings).expect("refresh should discover repo two");
+        if let Some(value) = prior_home {
+            std::env::set_var("HOME", value);
+        } else {
+            std::env::remove_var("HOME");
+        }
         assert_eq!(refreshed_again.projects.len(), 2);
         assert!(refreshed_again
             .projects

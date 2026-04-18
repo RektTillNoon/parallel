@@ -18,7 +18,7 @@ use crate::models::{
     SessionStatus, SessionsFile, Step, StepStatus, Subtask, SubtaskStatus, SyncPlanInput,
     WorkflowSession,
 };
-use crate::root_paths::{canonicalize_root, normalize_roots, root_belongs_to_watched_root};
+use crate::root_paths::{canonicalize_root, most_specific_watched_root, normalize_roots};
 use crate::storage_yaml::{
     append_json_line, ensure_dir, get_workflow_paths, now_iso, path_exists, read_git_branch,
     read_json_lines, read_text_if_exists, read_yaml_file, slugify, with_project_lock,
@@ -522,13 +522,7 @@ fn resolve_project_watched_root(
     }
 
     let root = canonicalize_root(root);
-    let mut candidates = store
-        .list_watched_roots()?
-        .into_iter()
-        .filter(|candidate| root_belongs_to_watched_root(&root, candidate))
-        .collect::<Vec<_>>();
-    candidates.sort_by_key(|candidate| candidate.len());
-    Ok(candidates.pop().unwrap_or(root))
+    Ok(most_specific_watched_root(&root, &store.list_watched_roots()?))
 }
 
 pub fn refresh_project_index(
@@ -2045,7 +2039,32 @@ mod tests {
         assert_eq!(snapshot.len(), 1);
         assert!(snapshot[0].root.ends_with("/watched/repo-one"));
 
-        let refreshed_again = list_projects(&roots, &index_db)?;
+        let codex_home = watched_root_dir.path().join(".codex");
+        fs::create_dir_all(&codex_home)?;
+        let codex_db = codex_home.join("state_9.sqlite");
+        let connection = rusqlite::Connection::open(&codex_db)?;
+        connection.execute_batch(
+            r#"
+            CREATE TABLE threads (
+              cwd TEXT,
+              archived INTEGER NOT NULL DEFAULT 0
+            );
+            "#,
+        )?;
+        connection.execute(
+            "INSERT INTO threads (cwd, archived) VALUES (?1, 0)",
+            rusqlite::params![repo_two.display().to_string()],
+        )?;
+
+        let prior_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", watched_root_dir.path());
+        let refreshed_again = list_projects(&roots, &index_db);
+        if let Some(value) = prior_home {
+            std::env::set_var("HOME", value);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        let refreshed_again = refreshed_again?;
         assert_eq!(refreshed_again.len(), 2);
         assert!(refreshed_again
             .iter()

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   choosePrimaryBoardRow,
+  projectCollectionSummary,
+  projectSectionLabel,
   resolveBoardSelectionFromRow,
   resolveSelectedSessionId,
 } from './App';
@@ -77,5 +79,12 @@ describe('resolveBoardSelectionFromRow', () => {
       selectedRoot: '/Users/light/Projects/notes',
       selectedSessionId: 'session-2',
     });
+  });
+});
+
+describe('project copy helpers', () => {
+  it('describes the sidebar collection as projects', () => {
+    expect(projectCollectionSummary(2, 5)).toBe('2 roots · 5 projects');
+    expect(projectSectionLabel).toBe('Projects');
   });
 });
