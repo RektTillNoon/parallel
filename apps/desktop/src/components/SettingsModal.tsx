@@ -32,6 +32,7 @@ type SettingsModalProps = {
   onRestartBridge: () => void;
   onRegenerateBridgeToken: () => void;
   onCopyBridgeSnippet: (kind: string) => void;
+  onCopyCodexTokenExport: () => void;
   agentDefaultsOpen: boolean;
   onToggleAgentDefaults: () => void;
   agentStatuses: AgentTargetStatus[] | null;
@@ -66,6 +67,7 @@ export default function SettingsModal({
   onRestartBridge,
   onRegenerateBridgeToken,
   onCopyBridgeSnippet,
+  onCopyCodexTokenExport,
   agentDefaultsOpen,
   onToggleAgentDefaults,
   agentStatuses,
@@ -224,6 +226,19 @@ export default function SettingsModal({
                 </p>
               </div>
             </div>
+            <div className="root-list">
+              <div className="root-row">
+                <div className="stack">
+                  <strong>Setup steps</strong>
+                  <span>1. Turn on Agent Bridge.</span>
+                  <span>2. Install projectctl if Claude Desktop needs it.</span>
+                  <span>3. Install or update each agent below.</span>
+                  <span>
+                    4. For Codex, copy the token export and relaunch Codex after token changes.
+                  </span>
+                </div>
+              </div>
+            </div>
             <div className="bridge-meta">
               <div>
                 <label>projectctl CLI</label>
@@ -264,12 +279,19 @@ export default function SettingsModal({
               {(agentStatuses ?? []).map((status) => {
                 const presentation = describeAgentDefaultsStatus(status);
                 const pending = agentPendingKind === status.kind;
+                const isCodex = status.kind === 'codex';
                 return (
                   <div className="root-row" key={status.kind}>
                     <div className="stack">
                       <strong className={`status status-${presentation.tone}`}>{status.label}</strong>
                       <span>{presentation.label}</span>
                       {presentation.detail ? <span className="muted">{presentation.detail}</span> : null}
+                      {isCodex ? (
+                        <span className="muted">
+                          Codex also needs <code>PARALLEL_MCP_TOKEN</code> in the environment that
+                          launches it.
+                        </span>
+                      ) : null}
                     </div>
                     <div className="bridge-actions">
                       <button
@@ -296,6 +318,11 @@ export default function SettingsModal({
                       <button type="button" onClick={() => onCopyBridgeSnippet(status.kind)}>
                         Copy setup
                       </button>
+                      {isCodex ? (
+                        <button type="button" onClick={onCopyCodexTokenExport}>
+                          Copy token export
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                 );

@@ -676,6 +676,21 @@ export default function App() {
     }
   }, []);
 
+  const handleCopyCodexTokenExport = useCallback(async () => {
+    setError(null);
+    try {
+      const snippets = await getBridgeClientSnippets('codex', selectedRootRef.current);
+      const exportLine = snippets[0]?.content.split('\n')[0]?.trim();
+      if (!exportLine) {
+        throw new Error('No Codex token export available');
+      }
+
+      await navigator.clipboard.writeText(exportLine);
+    } catch (copyError) {
+      setError(copyError instanceof Error ? copyError.message : String(copyError));
+    }
+  }, []);
+
   const handleApplyAgentDefaults = useCallback(
     async (kind: string, action: AgentInstallAction) => {
       setError(null);
@@ -885,6 +900,7 @@ export default function App() {
             onRestartBridge={() => void handleRestartBridge()}
             onRegenerateBridgeToken={() => void handleRegenerateBridgeToken()}
             onCopyBridgeSnippet={(kind) => void handleCopyBridgeSnippet(kind)}
+            onCopyCodexTokenExport={() => void handleCopyCodexTokenExport()}
             agentDefaultsOpen={agentDefaultsOpen}
             onToggleAgentDefaults={handleToggleAgentDefaults}
             agentStatuses={agentStatuses}

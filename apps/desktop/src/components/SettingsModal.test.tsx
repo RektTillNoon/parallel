@@ -29,6 +29,7 @@ describe('SettingsModal', () => {
         onRestartBridge={() => {}}
         onRegenerateBridgeToken={() => {}}
         onCopyBridgeSnippet={() => {}}
+        onCopyCodexTokenExport={() => {}}
         agentDefaultsOpen
         onToggleAgentDefaults={() => {}}
         agentStatuses={[
@@ -63,6 +64,12 @@ describe('SettingsModal', () => {
     expect(html).toContain('Agent Defaults');
     expect(html).toContain('projectctl CLI');
     expect(html).toContain('Install CLI');
+    expect(html).toContain('PARALLEL_MCP_TOKEN');
+    expect(html).toContain('Copy token export');
+    expect(html).toContain('Turn on Agent Bridge.');
+    expect(html).toContain('Install projectctl if Claude Desktop needs it.');
+    expect(html).toContain('Install or update each agent below.');
+    expect(html).toContain('For Codex, copy the token export and relaunch Codex after token changes.');
     expect(html).not.toContain('>CLI<');
     expect(html).not.toContain('Re-copy setup for: Codex');
   });
