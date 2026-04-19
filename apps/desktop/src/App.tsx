@@ -131,19 +131,6 @@ export function projectDiscoverySubtitle(project: ProjectSummary) {
   }
 }
 
-export function projectSourceLabel(project: ProjectSummary) {
-  if (project.discoverySource === 'parallel' || project.initialized) {
-    return 'Managed by Parallel';
-  }
-  if (project.discoverySource === 'codex') {
-    return 'Codex activity';
-  }
-  if (project.discoverySource === 'claude') {
-    return 'Claude Code activity';
-  }
-  return null;
-}
-
 function compactProjectStatus(status: ProjectSummary['status']) {
   switch (status) {
     case 'uninitialized':
@@ -955,9 +942,12 @@ export default function App() {
               <ContextRail
                 project={selectedSummary}
                 detail={selectedBoardProject}
+                sessionTitle={selectedBoardRow?.sessionTitle ?? selectedSummary?.name ?? 'No active session'}
+                sessionDisplayState={selectedBoardRow?.displayState ?? 'active'}
+                sessionStatusLabel={selectedBoardRow?.displayLabel ?? 'active'}
                 currentStepTitle={selectedBoardRow?.stepTitle ?? selectedSummary?.currentStepTitle ?? 'No current step'}
                 currentStepSummary={currentStepSummary}
-                projectSourceLabel={selectedSummary ? projectSourceLabel(selectedSummary) : null}
+                currentStepOwned={selectedBoardRow?.stepState === 'owned'}
               />
             </section>
           </>

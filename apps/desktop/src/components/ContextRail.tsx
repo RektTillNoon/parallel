@@ -2,6 +2,7 @@ import { memo } from 'react';
 
 import type { ActivityEvent } from '../lib/types';
 import type { BoardProjectDetail, ProjectSummary } from '../lib/types';
+import type { SessionBoardDisplayState } from '../lib/session-board';
 
 export function formatActivityTime(value: string) {
   const timestamp = Date.parse(value);
@@ -22,97 +23,97 @@ export function formatActivityTime(value: string) {
   return `${month} ${date.getDate()}`;
 }
 
-export type ActivityGroup = {
+export type CompactActivityEntry = {
   bucket: string;
-  entries: ActivityEvent[];
+  summary: string;
+  timestamp: string;
+  source: ActivityEvent['source'];
 };
 
-export function groupActivityEntries(entries: ActivityEvent[]): ActivityGroup[] {
-  const groups: ActivityGroup[] = [];
-  for (const entry of entries) {
-    const bucket = formatActivityTime(entry.timestamp);
-    const last = groups[groups.length - 1];
-    if (last && last.bucket === bucket) {
-      last.entries.push(entry);
-    } else {
-      groups.push({ bucket, entries: [entry] });
-    }
-  }
-  return groups;
+export function compactActivityEntries(entries: ActivityEvent[], limit = 4) {
+  return {
+    entries: entries.slice(0, limit).map((entry) => ({
+      bucket: formatActivityTime(entry.timestamp),
+      summary: entry.summary,
+      timestamp: entry.timestamp,
+      source: entry.source,
+    })),
+    hiddenCount: Math.max(0, entries.length - limit),
+  };
 }
 
 type ContextRailProps = {
   project: ProjectSummary | null;
   detail: BoardProjectDetail | null;
+  sessionTitle: string;
+  sessionDisplayState: SessionBoardDisplayState;
+  sessionStatusLabel: string;
   currentStepTitle: string;
   currentStepSummary: string;
-  projectSourceLabel: string | null;
+  currentStepOwned: boolean;
 };
 
 export default memo(function ContextRail({
   project,
   detail,
+  sessionTitle,
+  sessionDisplayState,
+  sessionStatusLabel,
   currentStepTitle,
   currentStepSummary,
-  projectSourceLabel,
+  currentStepOwned,
 }: ContextRailProps) {
   if (!project || !detail) {
     return null;
   }
 
-  const groups = groupActivityEntries(detail.recentActivity);
+  const recent = compactActivityEntries(detail.recentActivity);
 
   return (
     <aside className="context-rail">
       <section>
-        <p className="context-rail-label">Selected project</p>
-        <h2>{project.name}</h2>
+        <p className="context-rail-label">Session</p>
+        <div className="context-rail-heading">
+          <h2>{sessionTitle}</h2>
+          <span className={`status status-${sessionDisplayState}`}>{sessionStatusLabel}</span>
+        </div>
+        <p className="context-rail-project-name">{project.name}</p>
         <p>{project.root}</p>
-        {projectSourceLabel ? <p>{projectSourceLabel}</p> : null}
         {project.discoveryPath && project.discoveryPath !== project.root ? (
           <p>{project.discoveryPath}</p>
         ) : null}
       </section>
       <section>
-        <p className="context-rail-label">Current step</p>
+        <p className="context-rail-label">Step</p>
         <h3>{currentStepTitle}</h3>
-        <p>{currentStepSummary}</p>
+        <p>{currentStepOwned ? currentStepSummary : `Next: ${currentStepSummary}`}</p>
       </section>
       <section>
-        <p className="context-rail-label">Recent activity</p>
-        {groups.length === 0 ? (
+        <p className="context-rail-label">Recent</p>
+        {recent.entries.length === 0 ? (
           <p className="context-activity-empty">Nothing logged yet.</p>
         ) : (
-          <div className="context-activity-list">
-            {groups.map((group, groupIndex) => (
-              <div
-                className="context-activity-group"
-                key={`${group.bucket}-${group.entries[0].timestamp}-${groupIndex}`}
+          <ol className="context-activity-compact-list">
+            {recent.entries.map((entry, index) => (
+              <li
+                className="context-activity-compact-entry"
+                key={`${entry.timestamp}-${entry.summary}-${index}`}
               >
-                <time
-                  className="context-activity-time"
-                  dateTime={group.entries[0].timestamp}
-                >
-                  {group.bucket}
+                <time className="context-activity-compact-time" dateTime={entry.timestamp}>
+                  {entry.bucket}
                 </time>
-                <ol className="context-activity-entries">
-                  {group.entries.map((event, index) => (
-                    <li
-                      className="context-activity-entry"
-                      key={`${event.timestamp}-${event.actor}-${event.type}-${event.session_id ?? 'none'}-${event.step_id ?? 'none'}-${index}`}
-                    >
-                      <span
-                        className="context-activity-dot"
-                        data-source={event.source}
-                        aria-hidden="true"
-                      />
-                      <strong>{event.summary}</strong>
-                    </li>
-                  ))}
-                </ol>
-              </div>
+                <span
+                  className="context-activity-compact-dot"
+                  data-source={entry.source}
+                  aria-hidden="true"
+                />
+                <strong>{entry.summary}</strong>
+              </li>
             ))}
-          </div>
+            {recent.hiddenCount > 0 ? (
+              <li className="context-activity-more">+{recent.hiddenCount} more</li>
+            ) : null}
+          </ol>
         )}
       </section>
     </aside>

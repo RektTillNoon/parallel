@@ -9,7 +9,6 @@ import {
   projectInitPrompt,
   projectCollectionSummary,
   projectSectionLabel,
-  projectSourceLabel,
   resolveBoardSelectionFromRow,
   resolveSelectedSessionId,
 } from './App';
@@ -27,6 +26,9 @@ const board: SessionBoardData = {
       stepTitle: 'Capture requirements',
       summary: 'Write the initial problem statement.',
       status: 'active',
+      displayState: 'active',
+      displayLabel: 'active',
+      stepState: 'owned',
       lastUpdatedAt: '2026-04-16T19:24:12.870Z',
     },
     {
@@ -38,6 +40,9 @@ const board: SessionBoardData = {
       stepTitle: 'Draft outline',
       summary: 'Draft the outline.',
       status: 'active',
+      displayState: 'active',
+      displayLabel: 'active',
+      stepState: 'owned',
       lastUpdatedAt: '2026-04-16T19:25:12.870Z',
     },
   ],
@@ -149,33 +154,4 @@ describe('project copy helpers', () => {
     expect(projectDiscoverySubtitle(initializedProject)).toBeNull();
   });
 
-  it('uses project language in the selected-project source label', () => {
-    expect(
-      projectSourceLabel({
-        id: 'parallel-1',
-        name: 'parallel',
-        root: '/Users/light/Projects/parallel',
-        kind: 'software',
-        owner: 'light',
-        tags: [],
-        initialized: true,
-        status: 'in_progress',
-        stale: false,
-        missing: false,
-        currentStepId: null,
-        currentStepTitle: null,
-        blockerCount: 0,
-        totalStepCount: 1,
-        completedStepCount: 0,
-        activeSessionCount: 1,
-        focusSessionId: null,
-        lastUpdatedAt: null,
-        nextAction: null,
-        activeBranch: 'main',
-        pendingProposalCount: 0,
-        discoverySource: 'parallel',
-        discoveryPath: null,
-      }),
-    ).toBe('Managed by Parallel');
-  });
 });

@@ -1,5 +1,8 @@
 import type { BoardProjectDetail, LoadStatePayload, WorkflowSession } from './types';
 
+export type SessionBoardDisplayState = 'active' | 'blocked' | 'needs-step';
+export type SessionBoardStepState = 'owned' | 'unclaimed';
+
 export type SessionBoardRow = {
   sessionId: string;
   sessionTitle: string;
@@ -9,6 +12,9 @@ export type SessionBoardRow = {
   stepTitle: string;
   summary: string;
   status: WorkflowSession['status'] | 'blocked';
+  displayState: SessionBoardDisplayState;
+  displayLabel: string;
+  stepState: SessionBoardStepState;
   lastUpdatedAt: string;
 };
 
@@ -25,6 +31,26 @@ function buildBoardProjectLookup(boardProjects: BoardProjectDetail[]) {
   return new Map(boardProjects.map((project) => [project.root, project] as const));
 }
 
+function deriveDisplayState(
+  blocked: boolean,
+  stepState: SessionBoardStepState,
+): SessionBoardDisplayState {
+  if (blocked) {
+    return 'blocked';
+  }
+
+  return stepState === 'owned' ? 'active' : 'needs-step';
+}
+
+function formatDisplayLabel(displayState: SessionBoardDisplayState) {
+  switch (displayState) {
+    case 'needs-step':
+      return 'unclaimed';
+    default:
+      return displayState;
+  }
+}
+
 export function buildSessionBoard(
   state: LoadStatePayload,
 ): SessionBoardData {
@@ -39,6 +65,8 @@ export function buildSessionBoard(
       if (session.status !== 'active') continue;
 
       const step = session.owned_step_id ? detail.activeStepLookup[session.owned_step_id] ?? null : null;
+      const stepState: SessionBoardStepState = step ? 'owned' : 'unclaimed';
+      const displayState = deriveDisplayState(detail.blockers.length > 0, stepState);
 
       rows.push({
         sessionId: session.id,
@@ -46,9 +74,12 @@ export function buildSessionBoard(
         projectRoot: project.root,
         projectName: project.name,
         stepId: session.owned_step_id,
-        stepTitle: step?.title ?? 'No owned step',
+        stepTitle: step?.title ?? 'No step claimed',
         summary: step?.summary ?? detail.runtimeNextAction,
         status: detail.blockers.length > 0 ? 'blocked' : session.status,
+        displayState,
+        displayLabel: formatDisplayLabel(displayState),
+        stepState,
         lastUpdatedAt: session.last_updated_at,
       });
     }

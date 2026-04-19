@@ -28,10 +28,11 @@ export default memo(function SessionLedger({
           <div className="session-ledger-copy">
             <div className="session-ledger-title">
               <strong>{row.sessionTitle}</strong>
-              <span className={`session-ledger-status status-${row.status}`}>{row.status}</span>
+              <span className={`session-ledger-status status-${row.displayState}`}>{row.displayLabel}</span>
             </div>
-            <div className="session-ledger-meta">
-              {row.projectName} · {row.stepTitle}
+            <div className="session-ledger-meta">{row.projectName}</div>
+            <div className={`session-ledger-step step-${row.stepState}`}>
+              {row.stepTitle}
             </div>
             <div className="session-ledger-summary">{row.summary}</div>
           </div>

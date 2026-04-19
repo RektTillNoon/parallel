@@ -51,7 +51,7 @@ describe('Nothing-style typography contract', () => {
   it('compresses supporting chrome and activity copy during the final polish pass', () => {
     expect(styles).toMatch(/\.sidebar-top\s*{[^}]*align-items:\s*flex-start;/s);
     expect(styles).toMatch(/\.sidebar-actions\s*{[^}]*padding-top:\s*0\.25rem;/s);
-    expect(styles).toMatch(/\.context-activity-list strong\s*{[^}]*-webkit-line-clamp:\s*2;/s);
+    expect(styles).toMatch(/\.context-activity-compact-list strong\s*{[^}]*-webkit-line-clamp:\s*1;/s);
   });
 
   it('renders the board metrics row with the dot-matrix display numerals', () => {
@@ -61,14 +61,13 @@ describe('Nothing-style typography contract', () => {
     expect(styles).toMatch(/\.board-metrics dt\b[\s\S]*text-transform:\s*uppercase;/s);
   });
 
-  it('draws the recent activity timeline with grouped marginalia and a shared dot spine', () => {
-    expect(styles).toMatch(/\.context-activity-group\s*{[\s\S]*grid-template-columns:\s*2\.3rem\s+minmax\(0,\s*1fr\);/s);
-    expect(styles).toMatch(/\.context-activity-group\s*\+\s*\.context-activity-group\s*{[\s\S]*border-top:\s*1px dashed var\(--border\);/s);
-    expect(styles).toMatch(/\.context-activity-entries\s*{[\s\S]*gap:\s*0\.6rem;/s);
-    expect(styles).toMatch(/\.context-activity-entries:has\(>\s*li\s*\+\s*li\)::before\s*{[\s\S]*background:\s*var\(--border\);/s);
-    expect(styles).toMatch(/\.context-activity-entry\s*{[\s\S]*grid-template-columns:\s*7px\s+minmax\(0,\s*1fr\);/s);
-    expect(styles).toMatch(/\.context-activity-time\s*{[\s\S]*font-family:\s*var\(--font-mono\);/s);
-    expect(styles).toMatch(/\.context-activity-dot\s*{[^}]*border-radius:\s*999px;/s);
+  it('draws the recent activity timeline as a compact spine with terse marginalia', () => {
+    expect(styles).toMatch(/\.context-activity-compact-list\s*{[\s\S]*position:\s*relative;/s);
+    expect(styles).toMatch(/\.context-activity-compact-list::before\s*{[\s\S]*background:\s*var\(--border\);/s);
+    expect(styles).toMatch(/\.context-activity-compact-entry\s*{[\s\S]*grid-template-columns:\s*2rem\s+7px\s+minmax\(0,\s*1fr\);/s);
+    expect(styles).toMatch(/\.context-activity-compact-time\s*{[\s\S]*font-family:\s*var\(--font-mono\);/s);
+    expect(styles).toMatch(/\.context-activity-compact-dot\s*{[^}]*border-radius:\s*999px;/s);
+    expect(styles).toMatch(/\.context-activity-compact-list strong\s*{[^}]*-webkit-line-clamp:\s*1;/s);
   });
 
   it('lights the sidebar project rows with a leading status glyph', () => {
@@ -85,5 +84,8 @@ describe('Nothing-style typography contract', () => {
     expect(styles).not.toMatch(/\.focus-panel\b/);
     expect(styles).not.toMatch(/\.plan-panel\b/);
     expect(styles).not.toMatch(/\.timeline-panel\b/);
+    expect(styles).not.toMatch(/\.context-activity-group\b/);
+    expect(styles).not.toMatch(/\.context-activity-entries\b/);
+    expect(styles).not.toMatch(/\.context-activity-entry\b/);
   });
 });

@@ -199,14 +199,20 @@ describe('buildSessionBoard', () => {
       sessionId: 'session-4',
       projectName: 'notes',
       stepId: null,
-      stepTitle: 'No owned step',
+      stepTitle: 'No step claimed',
       summary: 'Resolve the blocker before drafting the outline.',
       status: 'blocked',
+      displayState: 'blocked',
+      displayLabel: 'blocked',
+      stepState: 'unclaimed',
     });
     expect(board.rows[2]).toMatchObject({
       sessionId: 'session-3',
       projectName: 'notes',
       status: 'blocked',
+      displayState: 'blocked',
+      displayLabel: 'blocked',
+      stepState: 'owned',
     });
   });
 
@@ -253,6 +259,33 @@ describe('buildSessionBoard', () => {
     const board = buildSessionBoard(singleProjectState);
 
     expect(board.rows.map((row) => row.sessionId)).toEqual(['session-1', 'broken-session']);
+  });
+
+  it('marks active sessions without an owned step as needing a step claim', () => {
+    const unblockedProjects: BoardProjectDetail[] = boardProjects.map((project) =>
+      project.root === '/Users/light/Projects/notes'
+        ? {
+            ...project,
+            blockers: [],
+          }
+        : project,
+    );
+
+    const singleProjectState: LoadStatePayload = {
+      ...loadStateWithBoardProjects,
+      projects: [loadStateWithBoardProjects.projects[1]],
+      boardProjects: unblockedProjects,
+    };
+
+    const board = buildSessionBoard(singleProjectState);
+
+    expect(board.rows[0]).toMatchObject({
+      sessionId: 'session-4',
+      stepTitle: 'No step claimed',
+      displayState: 'needs-step',
+      displayLabel: 'unclaimed',
+      stepState: 'unclaimed',
+    });
   });
 });
 

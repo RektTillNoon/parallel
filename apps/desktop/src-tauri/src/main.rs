@@ -1729,6 +1729,7 @@ fn init_tracing() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bridge::bundled_sidecar_binary_filename;
     use rand::{distributions::Alphanumeric, Rng};
 
     fn unique_temp_dir(label: &str) -> PathBuf {

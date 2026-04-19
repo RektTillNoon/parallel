@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { formatActivityTime, groupActivityEntries } from './ContextRail';
+import { compactActivityEntries, formatActivityTime } from './ContextRail';
 import type { ActivityEvent } from '../lib/types';
 
 const recentActivity: ActivityEvent[] = [
@@ -85,7 +85,7 @@ describe('formatActivityTime', () => {
   });
 });
 
-describe('groupActivityEntries', () => {
+describe('compactActivityEntries', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-04-16T20:00:00Z'));
@@ -110,43 +110,28 @@ describe('groupActivityEntries', () => {
     } satisfies ActivityEvent;
   }
 
-  it('collapses consecutive entries sharing a time bucket into one marginalia group', () => {
-    const groups = groupActivityEntries([
-      activity('Connected Codex', '2026-04-16T17:02:00Z'),
-      activity('Started step', '2026-04-16T17:01:00Z'),
-      activity('Ensured session', '2026-04-16T17:00:00Z'),
-      activity('Initialized workflow', '2026-04-11T20:00:00Z'),
+  it('keeps only the first few recent entries and reports the overflow count', () => {
+    const compact = compactActivityEntries([
+      activity('First', '2026-04-16T19:59:00Z'),
+      activity('Second', '2026-04-16T19:58:00Z'),
+      activity('Third', '2026-04-16T19:57:00Z'),
+      activity('Fourth', '2026-04-16T19:56:00Z'),
+      activity('Fifth', '2026-04-16T19:55:00Z'),
     ]);
 
-    expect(groups).toHaveLength(2);
-    expect(groups[0].bucket).toBe('3h');
-    expect(groups[0].entries.map((event) => event.summary)).toEqual([
-      'Connected Codex',
-      'Started step',
-      'Ensured session',
-    ]);
-    expect(groups[1].bucket).toBe('5d');
-    expect(groups[1].entries.map((event) => event.summary)).toEqual(['Initialized workflow']);
+    expect(compact.entries.map((entry) => entry.summary)).toEqual(['First', 'Second', 'Third', 'Fourth']);
+    expect(compact.hiddenCount).toBe(1);
   });
 
-  it('keeps non-adjacent entries with matching buckets in separate groups', () => {
-    const groups = groupActivityEntries([
-      activity('Fresh', '2026-04-16T17:00:00Z'),
-      activity('Middle', '2026-04-15T20:00:00Z'),
-      activity('Old-but-matches', '2026-04-16T17:00:00Z'),
+  it('adds compact relative timestamps for marginalia rendering', () => {
+    const compact = compactActivityEntries([
+      activity('Started step', '2026-04-16T17:00:00Z'),
     ]);
 
-    expect(groups.map((group) => group.bucket)).toEqual(['3h', '1d', '3h']);
-    expect(groups.map((group) => group.entries.length)).toEqual([1, 1, 1]);
-  });
-
-  it('preserves backend-provided ordering instead of re-sorting activity', () => {
-    const groups = groupActivityEntries([
-      activity('First in bucket', '2026-04-16T17:00:00Z'),
-      activity('Second in bucket', '2026-04-16T17:02:00Z'),
-      activity('Later bucket', '2026-04-15T20:00:00Z'),
-    ]);
-
-    expect(groups[0]?.entries.map((event) => event.summary)).toEqual(['First in bucket', 'Second in bucket']);
+    expect(compact.entries[0]).toMatchObject({
+      summary: 'Started step',
+      bucket: '3h',
+      source: 'agent',
+    });
   });
 });
