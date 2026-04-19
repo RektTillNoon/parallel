@@ -76,6 +76,9 @@ const emptyLoadState: LoadStatePayload = {
 
 const relativeTimeFormatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
 const LazySettingsModal = lazy(() => import('./components/SettingsModal'));
+const AUTO_REFRESH_INTERVAL_MS = 15_000;
+const HIDDEN_AUTO_REFRESH_INTERVAL_MS = 60_000;
+const AUTO_REFRESH_COALESCE_MS = 100;
 
 export function choosePrimaryBoardRow(
   board: SessionBoardData,
@@ -214,7 +217,7 @@ type SidebarProps = {
   projectsOpen: boolean;
   settingsOpen: boolean;
   watchedRootCount: number;
-  onSync: () => void;
+  onRefreshRepos: () => void;
   onToggleProjects: () => void;
   onSelectProject: (project: ProjectSummary) => void;
   onToggleSettings: () => void;
@@ -226,7 +229,7 @@ const Sidebar = memo(function Sidebar({
   projectsOpen,
   settingsOpen,
   watchedRootCount,
-  onSync,
+  onRefreshRepos,
   onToggleProjects,
   onSelectProject,
   onToggleSettings,
@@ -237,8 +240,12 @@ const Sidebar = memo(function Sidebar({
         <div className="panel-header sidebar-top">
           <h1 className="brand-mark">parallel</h1>
           <div className="sidebar-actions">
-            <button className="ghost-button" onClick={onSync}>
-              Sync
+            <button
+              className="ghost-button"
+              onClick={onRefreshRepos}
+              title="Tracked project state refreshes automatically. Use this to discover repos."
+            >
+              Refresh Repos
             </button>
           </div>
         </div>
@@ -319,8 +326,16 @@ export default function App() {
   const [agentPendingKind, setAgentPendingKind] = useState<string | null>(null);
   const [cliPending, setCliPending] = useState(false);
   const reloadInFlight = useRef(false);
-  const reloadQueued = useRef<string | null | undefined>(undefined);
+  const reloadQueued = useRef<
+    | {
+        selectRoot?: string | null;
+        mode: 'foreground' | 'background';
+      }
+    | undefined
+  >(undefined);
   const selectedRootRef = useRef<string | null>(null);
+  const lastAutoRefreshAtRef = useRef<number | null>(null);
+  const autoRefreshTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     selectedRootRef.current = selectedRoot;
@@ -336,15 +351,23 @@ export default function App() {
   );
 
   const reloadState = useCallback(
-    async (selectRoot?: string | null) => {
+    async (
+      selectRoot?: string | null,
+      options?: {
+        mode?: 'foreground' | 'background';
+      },
+    ) => {
+      const mode = options?.mode ?? 'foreground';
       if (reloadInFlight.current) {
-        reloadQueued.current = selectRoot;
+        reloadQueued.current = { selectRoot, mode };
         return;
       }
 
       reloadInFlight.current = true;
-      setLoading(true);
-      setError(null);
+      if (mode === 'foreground') {
+        setLoading(true);
+        setError(null);
+      }
       try {
         const nextState = await loadState();
         if (!nextState) {
@@ -352,19 +375,37 @@ export default function App() {
         }
         await applyLoadState(nextState, { selectRoot });
       } catch (loadError) {
-        setError(loadError instanceof Error ? loadError.message : String(loadError));
+        if (mode === 'foreground') {
+          setError(loadError instanceof Error ? loadError.message : String(loadError));
+        }
       } finally {
         reloadInFlight.current = false;
-        setLoading(false);
+        if (mode === 'foreground') {
+          setLoading(false);
+        }
         if (reloadQueued.current !== undefined) {
           const queued = reloadQueued.current;
           reloadQueued.current = undefined;
-          void reloadState(queued);
+          void reloadState(queued.selectRoot, { mode: queued.mode });
         }
       }
     },
     [applyLoadState],
   );
+
+  const scheduleAutoRefresh = useCallback(() => {
+    if (!isTauri()) {
+      return;
+    }
+    if (autoRefreshTimeoutRef.current !== null) {
+      return;
+    }
+    autoRefreshTimeoutRef.current = window.setTimeout(() => {
+      autoRefreshTimeoutRef.current = null;
+      lastAutoRefreshAtRef.current = Date.now();
+      void reloadState(selectedRootRef.current, { mode: 'background' });
+    }, AUTO_REFRESH_COALESCE_MS);
+  }, [reloadState]);
 
   const reconcileBridgeState = useCallback(async () => {
     try {
@@ -401,7 +442,7 @@ export default function App() {
         }
 
         const unlistenSnapshot = await listen('workflow://snapshot-changed', () => {
-          void reloadState(selectedRootRef.current);
+          scheduleAutoRefresh();
         });
         if (!active) {
           unlistenSnapshot();
@@ -447,18 +488,70 @@ export default function App() {
       },
       async () => {
         if (active) {
-          await reloadState();
+          await reloadState(undefined, { mode: 'foreground' });
+          lastAutoRefreshAtRef.current = Date.now();
         }
       },
     );
 
     return () => {
       active = false;
+      if (autoRefreshTimeoutRef.current !== null) {
+        window.clearTimeout(autoRefreshTimeoutRef.current);
+        autoRefreshTimeoutRef.current = null;
+      }
       for (const unlisten of unlisteners) {
         unlisten();
       }
     };
-  }, [reloadState]);
+  }, [reloadState, scheduleAutoRefresh]);
+
+  useEffect(() => {
+    if (!isTauri()) {
+      return;
+    }
+
+    const shouldAutoRefreshNow = () => {
+      const now = Date.now();
+      const minimumInterval =
+        document.visibilityState === 'hidden'
+          ? HIDDEN_AUTO_REFRESH_INTERVAL_MS
+          : AUTO_REFRESH_INTERVAL_MS;
+      const lastAutoRefreshAt = lastAutoRefreshAtRef.current;
+      return lastAutoRefreshAt === null || now - lastAutoRefreshAt >= minimumInterval;
+    };
+
+    const maybeRefresh = () => {
+      if (!shouldAutoRefreshNow()) {
+        return;
+      }
+      scheduleAutoRefresh();
+    };
+
+    const handleFocus = () => {
+      if (document.visibilityState !== 'visible') {
+        return;
+      }
+      scheduleAutoRefresh();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') {
+        return;
+      }
+      scheduleAutoRefresh();
+    };
+
+    const interval = window.setInterval(maybeRefresh, AUTO_REFRESH_INTERVAL_MS);
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [scheduleAutoRefresh]);
 
   useEffect(() => {
     if (!settingsOpen || !bridgeOpen || !shouldReconcileBridgeStatus(state)) {
@@ -734,12 +827,13 @@ export default function App() {
     }
   }, [cliStatus]);
 
-  const handleSync = useCallback(() => {
+  const handleRefreshRepos = useCallback(() => {
     void (async () => {
       setError(null);
       try {
         const nextState = await refreshProjects();
         await applyLoadState(nextState, { selectRoot: selectedRootRef.current });
+        lastAutoRefreshAtRef.current = Date.now();
       } catch (mutationError) {
         setError(mutationError instanceof Error ? mutationError.message : String(mutationError));
       }
@@ -793,7 +887,7 @@ export default function App() {
         projectsOpen={projectsOpen}
         settingsOpen={settingsOpen}
         watchedRootCount={state?.settings.watchedRoots.length ?? 0}
-        onSync={handleSync}
+        onRefreshRepos={handleRefreshRepos}
         onToggleProjects={handleToggleProjects}
         onSelectProject={handleProjectSelection}
         onToggleSettings={handleToggleSettings}
