@@ -39,6 +39,11 @@ import {
   type SessionBoardData,
   type SessionBoardRow,
 } from './lib/session-board';
+import {
+  deriveProjectLightState,
+  projectLightLabel,
+  type ProjectSummaryWithLight,
+} from './lib/project-light';
 import FocusView from './components/FocusView';
 import ProjectSwitcher, { hideNestedProjects } from './components/ProjectSwitcher';
 import ShaderBackdrop from './components/ShaderBackdrop';
@@ -103,6 +108,20 @@ export function choosePrimaryBoardRow(
 
 export function resolveSelectedSessionId(selectedBoardRow: SessionBoardRow | null) {
   return selectedBoardRow?.sessionId ?? null;
+}
+
+export function buildVisibleProjects(state: LoadStatePayload | null): ProjectSummaryWithLight[] {
+  const boardProjectLookup = new Map(
+    (state?.boardProjects ?? []).map((project) => [project.root, project] as const),
+  );
+  return hideNestedProjects(state?.projects ?? []).map((project) => {
+    const lightState = deriveProjectLightState(project, boardProjectLookup.get(project.root));
+    return {
+      ...project,
+      lightState,
+      lightLabel: projectLightLabel(lightState),
+    };
+  });
 }
 
 export const projectInitPrompt = 'Initialize workflow for this project.';
@@ -440,9 +459,9 @@ export default function App() {
     return state?.boardProjects.find((project) => project.root === selectedRoot) ?? null;
   }, [selectedRoot, state?.boardProjects]);
 
-  const visibleProjects = useMemo(() => {
-    return hideNestedProjects(state?.projects ?? []);
-  }, [state?.projects]);
+  const visibleProjects = useMemo<ProjectSummaryWithLight[]>(() => {
+    return buildVisibleProjects(state ?? emptyLoadState);
+  }, [state?.boardProjects, state?.projects]);
 
   const currentStepSummary = useMemo(() => {
     if (selectedBoardRow?.summary) {

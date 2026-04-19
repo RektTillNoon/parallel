@@ -248,26 +248,37 @@ code {
     0 0 18px color-mix(in oklab, var(--warn) 25%, transparent);
 }
 
-.switcher-dot[data-status="in_progress"] {
+.switcher-dot[data-status="live"] {
   background: var(--good);
   box-shadow:
     0 0 10px color-mix(in oklab, var(--good) 60%, transparent),
     0 0 18px color-mix(in oklab, var(--good) 28%, transparent);
 }
 
-.switcher-dot[data-status="done"] {
+.switcher-dot[data-status="resumable"] {
   background: var(--warn);
+  box-shadow:
+    0 0 10px color-mix(in oklab, var(--warn) 55%, transparent),
+    0 0 18px color-mix(in oklab, var(--warn) 25%, transparent);
+}
+
+.switcher-dot[data-status="done"] {
+  background: var(--line-strong);
+  box-shadow: none;
 }
 
 .switcher-dot[data-status="blocked"] {
-  background: var(--warn);
+  background: var(--danger);
+  box-shadow:
+    0 0 10px color-mix(in oklab, var(--danger) 68%, transparent),
+    0 0 18px color-mix(in oklab, var(--danger) 34%, transparent);
 }
 
 .switcher-dot[data-status="uninitialized"] {
   background: var(--danger);
   box-shadow:
-    0 0 10px color-mix(in oklab, var(--danger) 62%, transparent),
-    0 0 18px color-mix(in oklab, var(--danger) 30%, transparent);
+    0 0 8px color-mix(in oklab, var(--danger) 42%, transparent),
+    0 0 14px color-mix(in oklab, var(--danger) 18%, transparent);
 }
 
 .switcher-name {

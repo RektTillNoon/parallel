@@ -3,8 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ProjectSwitcher, { compactDuration, sortProjectsByRecency } from './ProjectSwitcher';
 import type { ProjectSummary } from '../lib/types';
+import type { ProjectLightState } from '../lib/project-light';
 
-function makeProject(overrides: Partial<ProjectSummary>): ProjectSummary {
+type SwitcherProject = ProjectSummary & {
+  lightState: ProjectLightState;
+  lightLabel: string;
+};
+
+function makeProject(overrides: Partial<SwitcherProject>): SwitcherProject {
   return {
     id: null,
     name: 'project',
@@ -29,6 +35,8 @@ function makeProject(overrides: Partial<ProjectSummary>): ProjectSummary {
     pendingProposalCount: 0,
     discoverySource: 'parallel',
     discoveryPath: null,
+    lightState: 'resumable',
+    lightLabel: 'Resumable',
     ...overrides,
   };
 }
@@ -79,6 +87,8 @@ describe('ProjectSwitcher', () => {
             name: 'trading',
             root: '/Users/light/Projects/trading',
             status: 'in_progress',
+            lightState: 'live',
+            lightLabel: 'Live work',
             lastUpdatedAt: '2026-04-16T19:46:00Z',
           }),
         ]}
@@ -91,7 +101,9 @@ describe('ProjectSwitcher', () => {
 
     expect(html).toContain('trading');
     expect(html).toContain('14m');
-    expect(html).toContain('data-status="in_progress"');
+    expect(html).toContain('data-status="live"');
+    expect(html).toContain('aria-label="trading, Live work"');
+    expect(html).toContain('title="trading, Live work"');
     expect(html).toContain('is-selected');
     expect(html).toContain('Settings');
     expect(html).not.toContain('switcher-compact-shell');
@@ -118,6 +130,8 @@ describe('ProjectSwitcher', () => {
             name: 'fresh',
             root: '/Users/light/Projects/fresh',
             status: 'in_progress',
+            lightState: 'live',
+            lightLabel: 'Live work',
             lastUpdatedAt: '2026-04-16T19:58:00Z',
           }),
         ]}

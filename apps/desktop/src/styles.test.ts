@@ -113,7 +113,16 @@ describe('single-focus design system', () => {
     expect(styles).toMatch(/\.switcher-dot\s*{[\s\S]*background:\s*var\(--warn\);/s);
     expect(styles).toMatch(/\.switcher-dot\s*{[\s\S]*box-shadow:\s*0 0 10px/);
     expect(styles).toMatch(
-      /\.switcher-dot\[data-status="in_progress"\][\s\S]*background:\s*var\(--good\);/s,
+      /\.switcher-dot\[data-status="live"\][\s\S]*background:\s*var\(--good\);/s,
+    );
+    expect(styles).toMatch(
+      /\.switcher-dot\[data-status="resumable"\][\s\S]*background:\s*var\(--warn\);/s,
+    );
+    expect(styles).toMatch(
+      /\.switcher-dot\[data-status="blocked"\][\s\S]*background:\s*var\(--danger\);/s,
+    );
+    expect(styles).toMatch(
+      /\.switcher-dot\[data-status="done"\][\s\S]*background:\s*var\(--line-strong\);/s,
     );
     expect(styles).toMatch(
       /\.switcher-dot\[data-status="uninitialized"\][\s\S]*background:\s*var\(--danger\);/s,

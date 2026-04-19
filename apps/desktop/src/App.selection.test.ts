@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildVisibleProjects,
   choosePrimaryBoardRow,
   emptySelectionMessage,
   noProjectsInRootsMessage,
@@ -8,6 +9,7 @@ import {
   resolveSelectedSessionId,
 } from './App';
 import type { SessionBoardData } from './lib/session-board';
+import type { LoadStatePayload } from './lib/types';
 
 const board: SessionBoardData = {
   rows: [
@@ -88,5 +90,105 @@ describe('app copy', () => {
     expect(projectInitPrompt).toBe('Initialize workflow for this project.');
     expect(noProjectsInRootsMessage).toBe('No projects in current roots.');
     expect(emptySelectionMessage).toBe('Pick a project to see what you left off with.');
+  });
+});
+
+describe('buildVisibleProjects', () => {
+  it('keeps ensure_session resumable and flips to live when the current step is claimed', () => {
+    const resumableState: LoadStatePayload = {
+      settings: {
+        watchedRoots: ['/Users/light/Projects'],
+        lastFocusedProject: '/Users/light/Projects/parallel',
+        mcp: { enabled: false, port: 4855, token: '' },
+      },
+      projects: [
+        {
+          id: 'parallel-1',
+          name: 'parallel',
+          root: '/Users/light/Projects/parallel',
+          kind: 'software',
+          owner: 'desktop-user',
+          tags: [],
+          initialized: true,
+          status: 'in_progress',
+          stale: false,
+          missing: false,
+          currentStepId: 'capture-requirements',
+          currentStepTitle: 'Capture requirements',
+          blockerCount: 0,
+          totalStepCount: 1,
+          completedStepCount: 0,
+          activeSessionCount: 1,
+          focusSessionId: 'session-1',
+          lastUpdatedAt: '2026-04-16T19:24:12.870Z',
+          nextAction: 'Write the initial problem statement and success criteria.',
+          activeBranch: 'main',
+          pendingProposalCount: 0,
+          discoverySource: 'parallel',
+          discoveryPath: null,
+        },
+      ],
+      boardProjects: [
+        {
+          root: '/Users/light/Projects/parallel',
+          sessions: [
+            {
+              id: 'session-1',
+              title: 'Parallel session',
+              actor: 'codex',
+              source: 'agent',
+              branch: 'main',
+              status: 'active',
+              owned_step_id: null,
+              observed_step_ids: [],
+              started_at: '2026-04-16T19:24:12.854Z',
+              last_updated_at: '2026-04-16T19:24:12.870Z',
+            },
+          ],
+          runtimeNextAction: 'Write the initial problem statement and success criteria.',
+          blockers: [],
+          recentActivity: [],
+          activeStepLookup: {
+            'capture-requirements': {
+              title: 'Capture requirements',
+              summary: 'Write the initial problem statement and success criteria.',
+            },
+          },
+        },
+      ],
+      mcpRuntime: {
+        status: 'stopped',
+        boundPort: null,
+        pid: null,
+        startedAt: null,
+        lastError: null,
+      },
+    };
+
+    const liveState: LoadStatePayload = {
+      ...resumableState,
+      boardProjects: [
+        {
+          ...resumableState.boardProjects[0],
+          sessions: [
+            {
+              ...resumableState.boardProjects[0].sessions[0],
+              owned_step_id: 'capture-requirements',
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(buildVisibleProjects(resumableState)[0]).toMatchObject({
+      root: '/Users/light/Projects/parallel',
+      lightState: 'resumable',
+      lightLabel: 'Resumable',
+    });
+    expect(buildVisibleProjects(liveState)[0]).toMatchObject({
+      root: '/Users/light/Projects/parallel',
+      lightState: 'live',
+      lightLabel: 'Live work',
+    });
   });
 });

@@ -1,5 +1,6 @@
 import { memo } from 'react';
 
+import type { ProjectSummaryWithLight } from '../lib/project-light';
 import type { ProjectSummary } from '../lib/types';
 
 export function compactDuration(value: string | null | undefined) {
@@ -47,9 +48,9 @@ export function hideNestedProjects(projects: ProjectSummary[]): ProjectSummary[]
 }
 
 type ProjectSwitcherProps = {
-  projects: ProjectSummary[];
+  projects: ProjectSummaryWithLight[];
   selectedRoot: string | null;
-  onSelectProject: (project: ProjectSummary) => void;
+  onSelectProject: (project: ProjectSummaryWithLight) => void;
   onOpenSettings: () => void;
   settingsOpen: boolean;
 };
@@ -77,9 +78,11 @@ export default memo(function ProjectSwitcher({
               type="button"
               className={`switcher-item ${selected ? 'is-selected' : ''}`.trim()}
               aria-pressed={selected}
+              aria-label={`${project.name}, ${project.lightLabel}`}
+              title={`${project.name}, ${project.lightLabel}`}
               onClick={() => onSelectProject(project)}
             >
-              <span className="switcher-dot" data-status={project.status} aria-hidden="true" />
+              <span className="switcher-dot" data-status={project.lightState} aria-hidden="true" />
               <span className="switcher-name">{project.name}</span>
               <span className="switcher-time">{compactDuration(project.lastUpdatedAt)}</span>
             </button>
