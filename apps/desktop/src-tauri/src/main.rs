@@ -13,7 +13,7 @@ use std::{
 };
 
 use bridge::{
-    bundled_sidecar_binary_filename, find_available_port, generate_token, resolve_bridge_url,
+    find_available_port, generate_token, resolve_bridge_url,
     resolve_bundled_projectctl_path,
     BridgeRuntimeSnapshot, BridgeSettings, BridgeStateEvent, BRIDGE_EVENT, DEFAULT_BRIDGE_PORT,
 };

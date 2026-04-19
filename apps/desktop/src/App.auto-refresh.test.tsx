@@ -277,13 +277,13 @@ describe('App auto refresh', () => {
     await flush();
   }
 
-  it('renders Refresh Repos with an auto-refresh affordance', async () => {
+  it('renders Sync with an auto-refresh affordance', async () => {
     await renderApp();
 
-    const button = findButton(container, 'Refresh Repos');
+    const button = findButton(container, 'Sync');
 
     expect(button).not.toBeNull();
-    expect(findButton(container, 'Sync')).toBeNull();
+    expect(findButton(container, 'Refresh Repos')).toBeNull();
     expect(button?.getAttribute('title')).toContain('Tracked project state refreshes automatically');
   });
 

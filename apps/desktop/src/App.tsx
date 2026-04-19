@@ -245,7 +245,7 @@ const Sidebar = memo(function Sidebar({
               onClick={onRefreshRepos}
               title="Tracked project state refreshes automatically. Use this to discover repos."
             >
-              Refresh Repos
+              Sync
             </button>
           </div>
         </div>
