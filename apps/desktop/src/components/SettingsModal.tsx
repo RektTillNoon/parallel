@@ -84,6 +84,21 @@ export default function SettingsModal({
 
   const cliPresentation = describeCliInstallStatus(cliStatus);
 
+  function getPrimaryAgentAction(kind: AgentTargetStatus['kind']) {
+    const status = agentStatuses?.find((entry) => entry.kind === kind);
+    if (!status) {
+      return null;
+    }
+    const presentation = describeAgentDefaultsStatus(status);
+    if (presentation.canUpdate) {
+      return { kind: 'update' as const, label: agentPendingKind === kind ? 'Updating…' : 'Update' };
+    }
+    if (presentation.canInstall) {
+      return { kind: 'install' as const, label: agentPendingKind === kind ? 'Installing…' : 'Install' };
+    }
+    return null;
+  }
+
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     onAddWatchRoot();
@@ -110,7 +125,9 @@ export default function SettingsModal({
         <div className="settings-head">
           <div>
             <h3>Settings</h3>
-            <p className="muted settings-copy">Roots, bridge, and local agent access.</p>
+            <p className="muted settings-copy">
+              Roots, bridge, and local agent access in one calm sheet.
+            </p>
           </div>
           <button
             type="button"
@@ -121,6 +138,7 @@ export default function SettingsModal({
             <span aria-hidden="true">✕</span>
           </button>
         </div>
+        <div className="settings-scroll">
         <CollapsibleSection
           label="Watch Roots"
           open={rootsOpen}
@@ -128,85 +146,124 @@ export default function SettingsModal({
           className="settings-section"
           count={watchedRoots.length}
         >
-          <form className="stack compact-form watch-root-form" onSubmit={handleSubmit}>
-            <div className="watch-root-controls">
-              <input
-                value={watchRootInput}
-                onChange={handleInputChange}
-                placeholder="/Users/light/Projects"
-              />
-              <button className="add-root-button" type="submit" disabled={watchRootPending}>
-                <span aria-hidden="true">+</span>
-                <span>{watchRootPending ? 'Adding…' : 'Add'}</span>
-              </button>
-            </div>
-            {watchRootError ? <div className="inline-error">{watchRootError}</div> : null}
-          </form>
-          <div className="root-list">
-            {watchedRoots.map((root) => (
-              <div className="root-row" key={root}>
-                <code>{root}</code>
-                <button
-                  className="ghost-button root-row-action"
-                  onClick={() => onRemoveWatchRoot(root)}
-                >
-                  Remove
-                </button>
+          <div className="settings-quiet-list">
+            <div className="settings-quiet-row settings-quiet-row-form">
+              <div className="settings-quiet-kicker">Add root</div>
+              <div className="settings-quiet-body">
+                <form className="stack compact-form watch-root-form" onSubmit={handleSubmit}>
+                  <div className="watch-root-controls">
+                    <input
+                      value={watchRootInput}
+                      onChange={handleInputChange}
+                      placeholder="/Users/light/Projects"
+                    />
+                    <button className="add-root-button" type="submit" disabled={watchRootPending}>
+                      <span aria-hidden="true">+</span>
+                      <span>{watchRootPending ? 'Adding…' : 'Add'}</span>
+                    </button>
+                  </div>
+                  {watchRootError ? <div className="inline-error">{watchRootError}</div> : null}
+                </form>
               </div>
-            ))}
+              <div className="settings-quiet-spacer" aria-hidden="true" />
+            </div>
+            <div className="root-list settings-root-list">
+              {watchedRoots.map((root) => (
+                <div className="root-row" key={root}>
+                  <div className="settings-quiet-kicker">Watching</div>
+                  <code>{root}</code>
+                  <button
+                    className="ghost-button root-row-action"
+                    onClick={() => onRemoveWatchRoot(root)}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
         </CollapsibleSection>
         <CollapsibleSection
-          label="Agent Bridge"
+          label="Bridge"
           open={bridgeOpen}
           onToggle={onToggleBridge}
           className="settings-section"
         >
-          <section className="bridge-panel">
-            <div className="panel-header">
-              <div>
-                <h3>Agent Bridge</h3>
-                <p className="muted settings-copy">Streamable HTTP for Codex and Claude.</p>
+          <section className="settings-quiet-list">
+            <div className="settings-quiet-row">
+              <div className="settings-quiet-kicker">Status</div>
+              <div className="settings-quiet-body">
+                <div className="settings-quiet-title">
+                  <strong>{bridgeStatus.label}</strong>
+                </div>
+                <p className="settings-quiet-note">{bridgeStatus.detail}</p>
+                {bridgeLastError ? <div className="inline-error">{bridgeLastError}</div> : null}
+                <div className="settings-row-footer">
+                  <div className="settings-row-meta" aria-hidden="true" />
+                  <div className="settings-quiet-actions">
+                    <label className="settings-toggle-control">
+                      <input
+                        type="checkbox"
+                        checked={bridgeEnabled}
+                        onChange={handleBridgeToggle}
+                        aria-label="Enable local bridge"
+                      />
+                      <span>Enabled</span>
+                    </label>
+                    <button type="button" onClick={onRestartBridge} disabled={!bridgeEnabled}>
+                      Restart
+                    </button>
+                  </div>
+                </div>
               </div>
-              <label className="toggle-row">
-                <span>{bridgeEnabled ? 'On' : 'Off'}</span>
-                <input type="checkbox" checked={bridgeEnabled} onChange={handleBridgeToggle} />
-              </label>
             </div>
-            <div className="bridge-meta">
-              <div>
-                <label>Status</label>
-                <strong className={`status status-${bridgeStatus.tone}`}>{bridgeStatus.label}</strong>
-                <p className="bridge-status-copy">{bridgeStatus.detail}</p>
+
+            <div className="settings-quiet-row">
+              <div className="settings-quiet-kicker">Access</div>
+              <div className="settings-quiet-body">
+                <p className="settings-quiet-note">
+                  Managed snippets keep Codex and Claude pointed at the same local bridge.
+                </p>
+                <div className="settings-row-footer settings-row-footer-owned">
+                  <details className="settings-inline-details settings-row-meta">
+                    <summary>Connection details</summary>
+                    <div className="settings-inline-stack">
+                      <div className="settings-inline-field">
+                        <span>URL</span>
+                        <code>{bridgeUrl}</code>
+                      </div>
+                      <div className="settings-inline-field">
+                        <span>Token</span>
+                        <code>{maskedToken}</code>
+                      </div>
+                    </div>
+                  </details>
+                  <div className="settings-quiet-actions">
+                    <details className="settings-action-details">
+                      <summary>
+                        <span>Utilities</span>
+                        <span aria-hidden="true" className="settings-action-caret">
+                          ▾
+                        </span>
+                      </summary>
+                      <div className="settings-utility-list">
+                        <button type="button" onClick={() => onCopyBridgeSnippet('codex')}>
+                          Copy Codex setup
+                        </button>
+                        <button type="button" onClick={() => onCopyBridgeSnippet('claudeCode')}>
+                          Copy Claude Code setup
+                        </button>
+                        <button type="button" onClick={() => onCopyBridgeSnippet('claudeDesktop')}>
+                          Copy Claude Desktop setup
+                        </button>
+                        <button type="button" onClick={onRegenerateBridgeToken}>
+                          Regenerate token
+                        </button>
+                      </div>
+                    </details>
+                  </div>
+                </div>
               </div>
-              <div>
-                <label>URL</label>
-                <code className="bridge-url">{bridgeUrl}</code>
-              </div>
-              <div>
-                <label>Token</label>
-                <code className="bridge-url">{maskedToken}</code>
-              </div>
-            </div>
-            {bridgeLastError ? <div className="inline-error">{bridgeLastError}</div> : null}
-            <div className="bridge-actions">
-              <button type="button" onClick={onRestartBridge} disabled={!bridgeEnabled}>
-                Restart
-              </button>
-              <button type="button" onClick={onRegenerateBridgeToken}>
-                Regenerate token
-              </button>
-            </div>
-            <div className="bridge-copy-list">
-              <button type="button" onClick={() => onCopyBridgeSnippet('codex')}>
-                Copy Codex setup
-              </button>
-              <button type="button" onClick={() => onCopyBridgeSnippet('claudeCode')}>
-                Copy Claude Code setup
-              </button>
-              <button type="button" onClick={() => onCopyBridgeSnippet('claudeDesktop')}>
-                Copy Claude Desktop setup
-              </button>
             </div>
           </section>
         </CollapsibleSection>
@@ -217,119 +274,145 @@ export default function SettingsModal({
           className="settings-section"
           count={agentStatuses?.length ?? 0}
         >
-          <section className="bridge-panel">
-            <div className="panel-header">
-              <div>
-                <h3>Agent Defaults</h3>
-                <p className="muted settings-copy">
-                  Install managed Parallel defaults instead of hand-copying setup after bridge changes.
+          <section className="settings-quiet-list">
+            <div className="settings-quiet-row">
+              <div className="settings-quiet-kicker">projectctl CLI</div>
+              <div className="settings-quiet-body">
+                <div className="settings-quiet-title">
+                  <strong>{cliPresentation.label}</strong>
+                </div>
+                <p className="settings-quiet-note">
+                  {cliPresentation.detail ??
+                    'Claude Desktop needs projectctl on a stable path. The install path stays tucked until you need it.'}
                 </p>
-              </div>
-            </div>
-            <div className="root-list">
-              <div className="root-row">
-                <div className="stack">
-                  <strong>Setup steps</strong>
-                  <span>1. Turn on Agent Bridge.</span>
-                  <span>2. Install projectctl if Claude Desktop needs it.</span>
-                  <span>3. Install or update each agent below.</span>
-                  <span>
-                    4. For Codex, copy the token export and relaunch Codex after token changes.
-                  </span>
-                </div>
-              </div>
-            </div>
-            <div className="bridge-meta">
-              <div>
-                <label>projectctl CLI</label>
-                <strong className={`status status-${cliPresentation.tone}`}>{cliPresentation.label}</strong>
-              </div>
-              <div>
-                <label>Install path</label>
-                <code className="bridge-url">{cliStatus?.installPath ?? 'Checking…'}</code>
-              </div>
-              <div>
-                <label>Bundled binary</label>
-                <code className="bridge-url">{cliStatus?.bundledPath ?? 'Checking…'}</code>
-              </div>
-            </div>
-            {cliPresentation.detail ? (
-              <div className="bridge-warning">{cliPresentation.detail}</div>
-            ) : null}
-            {cliStatus && cliPresentation.needsShellSetup ? (
-              <div className="root-list cli-setup-list">
-                <div className="root-row">
-                  <code>{cliStatus.persistCommand}</code>
-                </div>
-              </div>
-            ) : null}
-            <div className="bridge-actions">
-              <button type="button" onClick={onInstallCli} disabled={cliPending}>
-                {cliPending ? 'Installing…' : cliStatus?.installed ? 'Reinstall CLI' : 'Install CLI'}
-              </button>
-              <button
-                type="button"
-                onClick={onCopyCliSetup}
-                disabled={!cliStatus || !cliPresentation.needsShellSetup}
-              >
-                Copy shell setup
-              </button>
-            </div>
-            <div className="root-list">
-              {(agentStatuses ?? []).map((status) => {
-                const presentation = describeAgentDefaultsStatus(status);
-                const pending = agentPendingKind === status.kind;
-                const isCodex = status.kind === 'codex';
-                return (
-                  <div className="root-row" key={status.kind}>
-                    <div className="stack">
-                      <strong className={`status status-${presentation.tone}`}>{status.label}</strong>
-                      <span>{presentation.label}</span>
-                      {presentation.detail ? <span className="muted">{presentation.detail}</span> : null}
-                      {isCodex ? (
-                        <span className="muted">
-                          Codex also needs <code>PARALLEL_MCP_TOKEN</code> in the environment that
-                          launches it.
-                        </span>
+                <div className="settings-row-footer">
+                  <details className="settings-inline-details settings-row-meta">
+                    <summary>Reveal paths</summary>
+                    <div className="settings-inline-stack">
+                      <div className="settings-inline-field">
+                        <span>Install path</span>
+                        <code>{cliStatus?.installPath ?? 'Checking…'}</code>
+                      </div>
+                      <div className="settings-inline-field">
+                        <span>Bundled binary</span>
+                        <code>{cliStatus?.bundledPath ?? 'Checking…'}</code>
+                      </div>
+                      {cliStatus && cliPresentation.needsShellSetup ? (
+                        <div className="settings-inline-field">
+                          <span>Shell command</span>
+                          <code>{cliStatus.persistCommand}</code>
+                        </div>
                       ) : null}
                     </div>
-                    <div className="bridge-actions">
-                      <button
-                        type="button"
-                        onClick={() => onApplyAgentDefaults(status.kind, 'install')}
-                        disabled={!presentation.canInstall || pending}
-                      >
-                        {pending && presentation.canInstall ? 'Installing…' : 'Install'}
+                  </details>
+                  <div className="settings-quiet-actions">
+                    <button type="button" onClick={onInstallCli} disabled={cliPending}>
+                      {cliPending ? 'Installing…' : cliStatus?.installed ? 'Reinstall CLI' : 'Install CLI'}
+                    </button>
+                    {cliPresentation.needsShellSetup ? (
+                      <button type="button" onClick={onCopyCliSetup} disabled={!cliStatus}>
+                        Copy shell setup
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => onApplyAgentDefaults(status.kind, 'update')}
-                        disabled={!presentation.canUpdate || pending}
-                      >
-                        {pending && presentation.canUpdate ? 'Updating…' : 'Update'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onApplyAgentDefaults(status.kind, 'reinstall')}
-                        disabled={!presentation.canReinstall || pending}
-                      >
-                        {pending && presentation.canReinstall ? 'Reinstalling…' : 'Reinstall'}
-                      </button>
-                      <button type="button" onClick={() => onCopyBridgeSnippet(status.kind)}>
-                        Copy setup
-                      </button>
-                      {isCodex ? (
-                        <button type="button" onClick={onCopyCodexTokenExport}>
-                          Copy token export
-                        </button>
-                      ) : null}
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {(agentStatuses ?? []).map((status) => {
+              const presentation = describeAgentDefaultsStatus(status);
+              const pending = agentPendingKind === status.kind;
+              const isCodex = status.kind === 'codex';
+              const primaryAction = getPrimaryAgentAction(status.kind);
+
+              return (
+                <div className="settings-quiet-row" key={status.kind}>
+                <div className="settings-quiet-kicker">{status.label}</div>
+                <div className="settings-quiet-body">
+                  <div className="settings-quiet-title">
+                    <strong>{presentation.label}</strong>
+                  </div>
+                    {presentation.detail ? (
+                      <p className="settings-quiet-note">{presentation.detail}</p>
+                    ) : (
+                      <p className="settings-quiet-note">
+                        Managed defaults keep this agent aligned without a louder setup block.
+                      </p>
+                    )}
+                    {isCodex ? (
+                      <p className="settings-quiet-note">
+                        Codex also needs <code>PARALLEL_MCP_TOKEN</code> in the environment that
+                        launches it.
+                      </p>
+                    ) : null}
+                    <div className="settings-row-footer">
+                      <div className="settings-row-meta" aria-hidden="true" />
+                      <div className="settings-quiet-actions">
+                        {primaryAction ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onApplyAgentDefaults(status.kind, primaryAction.kind as AgentInstallAction)
+                            }
+                            disabled={pending}
+                          >
+                            {primaryAction.label}
+                          </button>
+                        ) : null}
+                        <details className="settings-action-details">
+                          <summary>
+                            <span>Utilities</span>
+                            <span aria-hidden="true" className="settings-action-caret">
+                              ▾
+                            </span>
+                          </summary>
+                          <div className="settings-utility-list">
+                            {presentation.canInstall && primaryAction?.kind !== 'install' ? (
+                              <button
+                                type="button"
+                                onClick={() => onApplyAgentDefaults(status.kind, 'install')}
+                                disabled={pending}
+                              >
+                                {pending ? 'Installing…' : 'Install'}
+                              </button>
+                            ) : null}
+                            {presentation.canUpdate && primaryAction?.kind !== 'update' ? (
+                              <button
+                                type="button"
+                                onClick={() => onApplyAgentDefaults(status.kind, 'update')}
+                                disabled={pending}
+                              >
+                                {pending ? 'Updating…' : 'Update'}
+                              </button>
+                            ) : null}
+                            {presentation.canReinstall ? (
+                              <button
+                                type="button"
+                                onClick={() => onApplyAgentDefaults(status.kind, 'reinstall')}
+                                disabled={pending}
+                              >
+                                {pending ? 'Reinstalling…' : 'Reinstall'}
+                              </button>
+                            ) : null}
+                            <button type="button" onClick={() => onCopyBridgeSnippet(status.kind)}>
+                              Copy setup
+                            </button>
+                            {isCodex ? (
+                              <button type="button" onClick={onCopyCodexTokenExport}>
+                                Copy token export
+                              </button>
+                            ) : null}
+                          </div>
+                        </details>
+                      </div>
                     </div>
                   </div>
-                );
-              })}
-            </div>
+                </div>
+              );
+            })}
           </section>
         </CollapsibleSection>
+        </div>
       </section>
     </div>
   );

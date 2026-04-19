@@ -8,6 +8,8 @@ export type SessionBoardRow = {
   sessionTitle: string;
   projectRoot: string;
   projectName: string;
+  branch: string | null;
+  source: WorkflowSession['source'];
   stepId: string | null;
   stepTitle: string;
   summary: string;
@@ -73,6 +75,8 @@ export function buildSessionBoard(
         sessionTitle: session.title,
         projectRoot: project.root,
         projectName: project.name,
+        branch: session.branch,
+        source: session.source,
         stepId: session.owned_step_id,
         stepTitle: step?.title ?? 'No step claimed',
         summary: step?.summary ?? detail.runtimeNextAction,

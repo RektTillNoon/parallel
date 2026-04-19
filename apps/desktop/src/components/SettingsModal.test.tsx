@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import SettingsModal from './SettingsModal';
 
 describe('SettingsModal', () => {
-  it('inlines the projectctl prerequisite into agent defaults instead of a separate CLI section', () => {
+  it('renders agent access as a quiet zen list with tucked technical detail', () => {
     const html = renderToStaticMarkup(
       <SettingsModal
         settingsOpen
@@ -61,15 +61,27 @@ describe('SettingsModal', () => {
       />,
     );
 
+    expect(html).toContain('Bridge');
     expect(html).toContain('Agent Defaults');
     expect(html).toContain('projectctl CLI');
-    expect(html).toContain('Install CLI');
+    expect(html).toContain('Reveal paths');
+    expect(html).toContain('Utilities');
+    expect(html).toContain('Connection details');
     expect(html).toContain('PARALLEL_MCP_TOKEN');
     expect(html).toContain('Copy token export');
-    expect(html).toContain('Turn on Agent Bridge.');
-    expect(html).toContain('Install projectctl if Claude Desktop needs it.');
-    expect(html).toContain('Install or update each agent below.');
-    expect(html).toContain('For Codex, copy the token export and relaunch Codex after token changes.');
+    expect(html).toContain('Codex');
+    expect(html).toContain('Not installed');
+    expect(html).toContain('settings-scroll');
+    expect(html).toContain('settings-toggle-control');
+    expect(html).toContain('settings-action-details');
+    expect(html).toContain('settings-utility-list');
+    expect(html).toContain('settings-row-footer-owned');
+    expect(html).toContain('type="checkbox"');
+    expect(html).toContain('calm sheet');
+    expect(html.indexOf('Utilities')).toBeLessThan(html.indexOf('Copy Codex setup'));
+    expect(html).not.toContain('settings-status-chip');
+    expect(html).not.toContain('settings-toggle-chip');
+    expect(html).not.toContain('Setup steps');
     expect(html).not.toContain('>CLI<');
     expect(html).not.toContain('Re-copy setup for: Codex');
   });

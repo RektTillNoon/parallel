@@ -15,10 +15,10 @@
       {
         "label": "main",
         "title": "parallel",
-        "width": 1180,
-        "height": 780,
-        "minWidth": 900,
-        "minHeight": 620
+        "width": 720,
+        "height": 560,
+        "minWidth": 520,
+        "minHeight": 420
       }
     ],
     "security": {

@@ -3,7 +3,6 @@ import { listen } from '@tauri-apps/api/event';
 import {
   Suspense,
   lazy,
-  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -40,9 +39,9 @@ import {
   type SessionBoardData,
   type SessionBoardRow,
 } from './lib/session-board';
-import CollapsibleSection from './components/CollapsibleSection';
-import ContextRail from './components/ContextRail';
-import SessionLedger from './components/SessionLedger';
+import FocusView from './components/FocusView';
+import ProjectSwitcher, { hideNestedProjects } from './components/ProjectSwitcher';
+import ShaderBackdrop from './components/ShaderBackdrop';
 import type {
   AgentInstallAction,
   AgentTargetStatus,
@@ -74,11 +73,17 @@ const emptyLoadState: LoadStatePayload = {
   },
 };
 
-const relativeTimeFormatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
 const LazySettingsModal = lazy(() => import('./components/SettingsModal'));
 const AUTO_REFRESH_INTERVAL_MS = 15_000;
 const HIDDEN_AUTO_REFRESH_INTERVAL_MS = 60_000;
 const AUTO_REFRESH_COALESCE_MS = 100;
+const MOTION_REDUCE_QUERY = '(prefers-reduced-motion: reduce)';
+
+type ViewTransitionDocument = Document & {
+  startViewTransition?: (update: () => void | Promise<void>) => {
+    finished: Promise<void>;
+  };
+};
 
 export function choosePrimaryBoardRow(
   board: SessionBoardData,
@@ -100,197 +105,22 @@ export function resolveSelectedSessionId(selectedBoardRow: SessionBoardRow | nul
   return selectedBoardRow?.sessionId ?? null;
 }
 
-export function resolveBoardSelectionFromRow(selectedRow: SessionBoardRow | null) {
-  return {
-    selectedRoot: selectedRow?.projectRoot ?? null,
-    selectedSessionId: selectedRow?.sessionId ?? null,
-  };
-}
-
-export function projectCollectionSummary(watchedRootCount: number, projectCount: number) {
-  return `${watchedRootCount} roots · ${projectCount} projects`;
-}
-
-export const projectSectionLabel = 'Projects';
 export const projectInitPrompt = 'Initialize workflow for this project.';
-export const activeSessionsSubtitle = 'Live log of work in motion across watched projects.';
-export const activeProjectsMetricLabel = 'Projects live';
 export const noProjectsInRootsMessage = 'No projects in current roots.';
+export const emptySelectionMessage = 'Pick a project to see what you left off with.';
 
-export function projectDiscoverySubtitle(project: ProjectSummary) {
-  if (project.initialized || !project.discoverySource || project.discoverySource === 'parallel') {
-    return null;
+function startViewTransition(update: () => void) {
+  const nextDocument = document as ViewTransitionDocument;
+  if (
+    nextDocument.startViewTransition &&
+    !window.matchMedia(MOTION_REDUCE_QUERY).matches
+  ) {
+    nextDocument.startViewTransition(update);
+    return;
   }
-  switch (project.discoverySource) {
-    case 'codex':
-      return 'Codex activity';
-    case 'claude':
-      return 'Claude Code activity';
-    default:
-      return null;
-  }
+
+  update();
 }
-
-function compactProjectStatus(status: ProjectSummary['status']) {
-  switch (status) {
-    case 'uninitialized':
-      return 'new';
-    case 'in_progress':
-      return 'active';
-    default:
-      return status;
-  }
-}
-
-function formatRelativeTime(value: string | null | undefined) {
-  if (!value) {
-    return 'Unknown';
-  }
-
-  const timestamp = Date.parse(value);
-  if (Number.isNaN(timestamp)) {
-    return value;
-  }
-
-  const diffMs = timestamp - Date.now();
-  const absMinutes = Math.round(Math.abs(diffMs) / 60000);
-
-  if (absMinutes < 1) {
-    return 'just now';
-  }
-
-  if (absMinutes < 60) {
-    return relativeTimeFormatter.format(Math.round(diffMs / 60000), 'minute');
-  }
-
-  const absHours = Math.round(absMinutes / 60);
-  if (absHours < 24) {
-    return relativeTimeFormatter.format(Math.round(diffMs / 3600000), 'hour');
-  }
-
-  const absDays = Math.round(absHours / 24);
-  return relativeTimeFormatter.format(Math.round(diffMs / 86400000), 'day');
-}
-
-export function formatShortDuration(value: string | null | undefined) {
-  if (!value) {
-    return '—';
-  }
-
-  const timestamp = Date.parse(value);
-  if (Number.isNaN(timestamp)) {
-    return '—';
-  }
-
-  const diffMinutes = Math.max(0, Math.round((Date.now() - timestamp) / 60000));
-  if (diffMinutes < 1) return 'now';
-  if (diffMinutes < 60) return `${diffMinutes}m`;
-  const hours = Math.round(diffMinutes / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.round(hours / 24);
-  if (days < 7) return `${days}d`;
-  const weeks = Math.round(days / 7);
-  if (weeks < 5) return `${weeks}w`;
-  return `${Math.round(days / 30)}mo`;
-}
-
-function padCount(value: number) {
-  return value < 10 ? `0${value}` : String(value);
-}
-
-type SidebarProps = {
-  projects: ProjectSummary[];
-  selectedRoot: string | null;
-  projectsOpen: boolean;
-  settingsOpen: boolean;
-  watchedRootCount: number;
-  onRefreshRepos: () => void;
-  onToggleProjects: () => void;
-  onSelectProject: (project: ProjectSummary) => void;
-  onToggleSettings: () => void;
-};
-
-const Sidebar = memo(function Sidebar({
-  projects,
-  selectedRoot,
-  projectsOpen,
-  settingsOpen,
-  watchedRootCount,
-  onRefreshRepos,
-  onToggleProjects,
-  onSelectProject,
-  onToggleSettings,
-}: SidebarProps) {
-  return (
-    <aside className="sidebar">
-      <div className="sidebar-block">
-        <div className="panel-header sidebar-top">
-          <h1 className="brand-mark">parallel</h1>
-          <div className="sidebar-actions">
-            <button
-              className="ghost-button"
-              onClick={onRefreshRepos}
-              title="Tracked project state refreshes automatically. Use this to discover repos."
-            >
-              Sync
-            </button>
-          </div>
-        </div>
-        <p className="sidebar-meta">
-          {projectCollectionSummary(watchedRootCount, projects.length)}
-        </p>
-      </div>
-      <CollapsibleSection
-        label={projectSectionLabel}
-        open={projectsOpen}
-        onToggle={onToggleProjects}
-        className="sidebar-block projects-toggle"
-        count={projects.length}
-      >
-        <div className="project-list">
-          {projects.map((project) => (
-            <button
-              className={`project-row ${selectedRoot === project.root ? 'selected' : ''}`}
-              key={project.root}
-              onClick={() => onSelectProject(project)}
-            >
-              <div className="project-row-head">
-                <span className="project-row-lead">
-                  <span
-                    className="project-status-dot"
-                    data-status={project.status}
-                    aria-hidden="true"
-                  />
-                  <strong>{project.name}</strong>
-                </span>
-                <span className="project-row-state">{compactProjectStatus(project.status)}</span>
-              </div>
-              {projectDiscoverySubtitle(project) ? (
-                <span className="project-row-subtitle">{projectDiscoverySubtitle(project)}</span>
-              ) : null}
-            </button>
-          ))}
-        </div>
-      </CollapsibleSection>
-      <div className="sidebar-footer">
-        <button
-          type="button"
-          className={`ghost-button settings-button sidebar-settings-button ${settingsOpen ? 'is-open' : ''}`}
-          aria-expanded={settingsOpen}
-          aria-controls="settings-dialog"
-          aria-haspopup="dialog"
-          aria-label={settingsOpen ? 'Close settings' : 'Open settings'}
-          onClick={onToggleSettings}
-        >
-          <span className="settings-button-icon" aria-hidden="true">
-            ⚙
-          </span>
-          <span className="settings-button-label">Settings</span>
-        </button>
-      </div>
-    </aside>
-  );
-});
 
 export default function App() {
   const [state, setState] = useState<LoadStatePayload | null>(null);
@@ -307,7 +137,6 @@ export default function App() {
   const [rootsOpen, setRootsOpen] = useState(false);
   const [bridgeOpen, setBridgeOpen] = useState(true);
   const [agentDefaultsOpen, setAgentDefaultsOpen] = useState(true);
-  const [projectsOpen, setProjectsOpen] = useState(true);
   const [cliStatus, setCliStatus] = useState<CliInstallStatus | null>(null);
   const [agentStatuses, setAgentStatuses] = useState<AgentTargetStatus[] | null>(null);
   const [agentPendingKind, setAgentPendingKind] = useState<string | null>(null);
@@ -491,7 +320,7 @@ export default function App() {
         unlisten();
       }
     };
-  }, [reloadState, scheduleAutoRefresh]);
+  }, [applyLoadState, reloadState, scheduleAutoRefresh]);
 
   useEffect(() => {
     if (!isTauri()) {
@@ -555,8 +384,7 @@ export default function App() {
     bridgeOpen,
     reconcileBridgeState,
     settingsOpen,
-    state?.settings.mcp.enabled,
-    state?.mcpRuntime.status,
+    state,
   ]);
 
   useEffect(() => {
@@ -613,6 +441,10 @@ export default function App() {
     return state?.boardProjects.find((project) => project.root === selectedRoot) ?? null;
   }, [selectedRoot, state?.boardProjects]);
 
+  const visibleProjects = useMemo(() => {
+    return hideNestedProjects(state?.projects ?? []);
+  }, [state?.projects]);
+
   const currentStepSummary = useMemo(() => {
     if (selectedBoardRow?.summary) {
       return selectedBoardRow.summary;
@@ -623,8 +455,12 @@ export default function App() {
         return activeStep.summary;
       }
     }
-    return selectedBoardProject?.runtimeNextAction ?? 'No step summary';
-  }, [selectedBoardProject, selectedBoardRow?.summary, selectedSummary?.currentStepId]);
+    return (
+      selectedBoardProject?.runtimeNextAction ??
+      selectedSummary?.nextAction ??
+      'Nothing claimed yet.'
+    );
+  }, [selectedBoardProject, selectedBoardRow?.summary, selectedSummary]);
 
   const noProjectsDiscovered =
     !loading && Boolean(state) && state.settings.watchedRoots.length > 0 && state.projects.length === 0;
@@ -645,15 +481,15 @@ export default function App() {
   }, [settingsOpen]);
 
   const selectProject = useCallback(async (project: ProjectSummary) => {
-    setSelectedRoot(project.root);
+    startViewTransition(() => {
+      setSelectedRoot(project.root);
+      if (!project.initialized) {
+        setInitName(project.name);
+      }
+    });
     void setLastFocusedProject(project.root).catch((selectionError) => {
       setError(selectionError instanceof Error ? selectionError.message : String(selectionError));
     });
-
-    if (!project.initialized) {
-      setInitName(project.name);
-      return;
-    }
   }, []);
 
   const handleAddWatchRoot = useCallback(async () => {
@@ -814,7 +650,7 @@ export default function App() {
     }
   }, [cliStatus]);
 
-  const handleRefreshRepos = useCallback(() => {
+  const handleSync = useCallback(() => {
     void (async () => {
       setError(null);
       try {
@@ -827,9 +663,11 @@ export default function App() {
     })();
   }, [applyLoadState]);
 
-  const handleToggleProjects = useCallback(() => setProjectsOpen((open) => !open), []);
-  const handleToggleSettings = useCallback(() => setSettingsOpen((open) => !open), []);
-  const handleCloseSettings = useCallback(() => setSettingsOpen(false), []);
+  const handleToggleSettings = useCallback(
+    () => startViewTransition(() => setSettingsOpen((open) => !open)),
+    [],
+  );
+  const handleCloseSettings = useCallback(() => startViewTransition(() => setSettingsOpen(false)), []);
   const handleToggleRoots = useCallback(() => setRootsOpen((open) => !open), []);
   const handleToggleBridge = useCallback(() => setBridgeOpen((open) => !open), []);
   const handleToggleAgentDefaults = useCallback(() => setAgentDefaultsOpen((open) => !open), []);
@@ -840,15 +678,6 @@ export default function App() {
     },
     [selectProject],
   );
-
-  const handleBoardRowSelection = useCallback((row: SessionBoardRow) => {
-    const nextSelection = resolveBoardSelectionFromRow(row);
-    setSelectedRoot(nextSelection.selectedRoot);
-    setSelectedSessionId(nextSelection.selectedSessionId);
-    void setLastFocusedProject(row.projectRoot).catch((selectionError) => {
-      setError(selectionError instanceof Error ? selectionError.message : String(selectionError));
-    });
-  }, []);
 
   const bridgePort = state?.mcpRuntime.boundPort ?? state?.settings.mcp.port ?? null;
   const bridgeUrl = bridgePort ? `http://127.0.0.1:${bridgePort}/mcp` : 'Not configured';
@@ -868,23 +697,32 @@ export default function App() {
 
   return (
     <div className="shell">
-      <Sidebar
-        projects={state?.projects ?? []}
+      <ShaderBackdrop />
+      <ProjectSwitcher
+        projects={visibleProjects}
         selectedRoot={selectedRoot}
-        projectsOpen={projectsOpen}
-        settingsOpen={settingsOpen}
-        watchedRootCount={state?.settings.watchedRoots.length ?? 0}
-        onRefreshRepos={handleRefreshRepos}
-        onToggleProjects={handleToggleProjects}
         onSelectProject={handleProjectSelection}
-        onToggleSettings={handleToggleSettings}
+        onOpenSettings={handleToggleSettings}
+        settingsOpen={settingsOpen}
       />
 
-      <main className="content">
-        {loading ? <div className="empty-state">Loading state…</div> : null}
+      <main className="stage">
+        <button
+          type="button"
+          className="stage-sync"
+          onClick={handleSync}
+          title="Refresh tracked projects"
+          aria-label="Refresh tracked projects"
+        >
+          <span aria-hidden="true">↻</span>
+          <span className="stage-sync-label">Sync</span>
+        </button>
+
+        {loading ? <div className="empty-state">Loading…</div> : null}
         {error ? <div className="error-banner">{error}</div> : null}
+
         {!loading && selectedSummary && !selectedSummary.initialized ? (
-          <section className="panel init-panel">
+          <section className="init-panel">
             <h2>{selectedSummary.name}</h2>
             <p className="muted">{selectedSummary.root}</p>
             <p>{projectInitPrompt}</p>
@@ -905,56 +743,18 @@ export default function App() {
           </section>
         ) : null}
 
-        {!loading && (board.rows.length > 0 || Boolean(selectedBoardProject)) ? (
-          <>
-            <section className="board-topline">
-              <div>
-                <h2>Active sessions</h2>
-                <p className="muted">{activeSessionsSubtitle}</p>
-              </div>
-              <dl className="board-metrics" aria-label="Board totals">
-                <div>
-                  <dd>{padCount(board.rows.length)}</dd>
-                  <dt>Active</dt>
-                </div>
-                <div>
-                  <dd>{padCount(state?.projects.filter((project) => project.blockerCount > 0).length ?? 0)}</dd>
-                  <dt>Blocked</dt>
-                </div>
-                <div>
-                  <dd>{padCount(state?.projects.filter((project) => project.activeSessionCount > 0).length ?? 0)}</dd>
-                  <dt>{activeProjectsMetricLabel}</dt>
-                </div>
-                <div>
-                  <dd className="board-metrics-time">{formatShortDuration(board.rows[0]?.lastUpdatedAt)}</dd>
-                  <dt>Last touch</dt>
-                </div>
-              </dl>
-            </section>
-
-            <section className="session-board-layout">
-              <SessionLedger
-                rows={board.rows}
-                selectedSessionId={selectedBoardRow?.sessionId ?? null}
-                onSelectSession={handleBoardRowSelection}
-                formatRelativeTime={formatRelativeTime}
-              />
-              <ContextRail
-                project={selectedSummary}
-                detail={selectedBoardProject}
-                sessionTitle={selectedBoardRow?.sessionTitle ?? selectedSummary?.name ?? 'No active session'}
-                sessionDisplayState={selectedBoardRow?.displayState ?? 'active'}
-                sessionStatusLabel={selectedBoardRow?.displayLabel ?? 'active'}
-                currentStepTitle={selectedBoardRow?.stepTitle ?? selectedSummary?.currentStepTitle ?? 'No current step'}
-                currentStepSummary={currentStepSummary}
-                currentStepOwned={selectedBoardRow?.stepState === 'owned'}
-              />
-            </section>
-          </>
+        {!loading && selectedSummary?.initialized ? (
+          <FocusView
+            project={selectedSummary}
+            detail={selectedBoardProject}
+            session={selectedBoardRow}
+            summary={currentStepSummary}
+          />
         ) : null}
-        {!loading && !board.rows.length && !selectedSummary ? (
+
+        {!loading && !selectedSummary ? (
           <div className="empty-state">
-            {noProjectsDiscovered ? noProjectsInRootsMessage : 'Add a root to start.'}
+            {noProjectsDiscovered ? noProjectsInRootsMessage : emptySelectionMessage}
           </div>
         ) : null}
       </main>

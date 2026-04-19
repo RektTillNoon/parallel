@@ -236,6 +236,23 @@ describe('App auto refresh', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-04-18T14:02:00.000Z'));
+    if (!window.matchMedia) {
+      Object.defineProperty(window, 'matchMedia', {
+        configurable: true,
+        writable: true,
+        value: (query: string) => ({
+          matches: false,
+          media: query,
+          onchange: null,
+          addListener: () => {},
+          removeListener: () => {},
+          addEventListener: () => {},
+          removeEventListener: () => {},
+          dispatchEvent: () => false,
+        }),
+      });
+    }
+    HTMLCanvasElement.prototype.getContext = (() => null) as unknown as HTMLCanvasElement['getContext'];
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -284,7 +301,7 @@ describe('App auto refresh', () => {
 
     expect(button).not.toBeNull();
     expect(findButton(container, 'Refresh Repos')).toBeNull();
-    expect(button?.getAttribute('title')).toContain('Tracked project state refreshes automatically');
+    expect(button?.getAttribute('title')).toContain('Refresh tracked projects');
   });
 
   it('uses loadState for background refresh and not refreshProjects', async () => {
@@ -305,18 +322,18 @@ describe('App auto refresh', () => {
       .mockImplementationOnce(() => nextLoad.promise);
 
     await renderApp();
-    expect(container.textContent).toContain('Active sessions');
+    expect(container.textContent).toContain('Recent activity');
 
     await advance(15100);
 
     expect(apiMocks.loadState).toHaveBeenCalledTimes(2);
-    expect(container.textContent).not.toContain('Loading state…');
+    expect(container.textContent).not.toContain('Loading…');
     expect(container.querySelector('.error-banner')).toBeNull();
 
     nextLoad.reject(new Error('background load failed'));
     await flush();
 
-    expect(container.textContent).toContain('Active sessions');
+    expect(container.textContent).toContain('Recent activity');
     expect(container.querySelector('.error-banner')).toBeNull();
   });
 
@@ -380,25 +397,21 @@ describe('App auto refresh', () => {
     expect(tauriUnlisteners.every((unlisten) => unlisten.mock.calls.length === 1)).toBe(true);
   });
 
-  it('does not change the selected session when a background refresh keeps the same pair', async () => {
+  it('keeps the focused project stable across background refreshes', async () => {
     apiMocks.loadState
       .mockResolvedValueOnce(buildLoadState())
       .mockResolvedValue(buildLoadState());
 
     await renderApp();
 
-    const secondSessionButton = findButton(container, 'Second session');
-    expect(secondSessionButton).not.toBeNull();
-
-    await act(async () => {
-      secondSessionButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-
-    expect(secondSessionButton?.getAttribute('aria-pressed')).toBe('true');
+    const projectButton = findButton(container, 'parallel');
+    expect(projectButton).not.toBeNull();
+    expect(projectButton?.getAttribute('aria-pressed')).toBe('true');
 
     await advance(15100);
 
-    const refreshedSecondSessionButton = findButton(container, 'Second session');
-    expect(refreshedSecondSessionButton?.getAttribute('aria-pressed')).toBe('true');
+    const refreshedProjectButton = findButton(container, 'parallel');
+    expect(refreshedProjectButton?.getAttribute('aria-pressed')).toBe('true');
+    expect(container.textContent).toContain('Recent activity');
   });
 });

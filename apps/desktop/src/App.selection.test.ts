@@ -1,18 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  activeProjectsMetricLabel,
-  activeSessionsSubtitle,
   choosePrimaryBoardRow,
+  emptySelectionMessage,
   noProjectsInRootsMessage,
-  projectDiscoverySubtitle,
   projectInitPrompt,
-  projectCollectionSummary,
-  projectSectionLabel,
-  resolveBoardSelectionFromRow,
   resolveSelectedSessionId,
 } from './App';
-import type { ProjectSummary } from './lib/types';
 import type { SessionBoardData } from './lib/session-board';
 
 const board: SessionBoardData = {
@@ -22,6 +16,8 @@ const board: SessionBoardData = {
       sessionTitle: 'Parallel session',
       projectRoot: '/Users/light/Projects/parallel',
       projectName: 'parallel',
+      branch: 'main',
+      source: 'agent',
       stepId: 'capture-requirements',
       stepTitle: 'Capture requirements',
       summary: 'Write the initial problem statement.',
@@ -36,6 +32,8 @@ const board: SessionBoardData = {
       sessionTitle: 'Notes session',
       projectRoot: '/Users/light/Projects/notes',
       projectName: 'notes',
+      branch: 'main',
+      source: 'agent',
       stepId: 'draft-outline',
       stepTitle: 'Draft outline',
       summary: 'Draft the outline.',
@@ -85,73 +83,10 @@ describe('choosePrimaryBoardRow', () => {
   });
 });
 
-describe('resolveBoardSelectionFromRow', () => {
-  it('keeps project and session selection aligned to the clicked ledger row', () => {
-    expect(resolveBoardSelectionFromRow(board.rows[1])).toEqual({
-      selectedRoot: '/Users/light/Projects/notes',
-      selectedSessionId: 'session-2',
-    });
-  });
-});
-
-describe('project copy helpers', () => {
-  it('describes the sidebar collection as projects', () => {
-    expect(projectCollectionSummary(2, 5)).toBe('2 roots · 5 projects');
-    expect(projectSectionLabel).toBe('Projects');
-  });
-
-  it('keeps the remaining desktop copy aligned to project language', () => {
+describe('app copy', () => {
+  it('keeps the focus-oriented copy trimmed to initialization and empty states', () => {
     expect(projectInitPrompt).toBe('Initialize workflow for this project.');
-    expect(activeSessionsSubtitle).toBe('Live log of work in motion across watched projects.');
-    expect(activeProjectsMetricLabel).toBe('Projects live');
     expect(noProjectsInRootsMessage).toBe('No projects in current roots.');
+    expect(emptySelectionMessage).toBe('Pick a project to see what you left off with.');
   });
-
-  it('shows provenance subtitles only for external-tool candidates', () => {
-    const codexProject = {
-      id: null,
-      name: 'foo',
-      root: '/Users/light/Projects/foo',
-      kind: null,
-      owner: null,
-      tags: [],
-      initialized: false,
-      status: 'uninitialized',
-      stale: false,
-      missing: false,
-      currentStepId: null,
-      currentStepTitle: null,
-      blockerCount: 0,
-      totalStepCount: 0,
-      completedStepCount: 0,
-      activeSessionCount: 0,
-      focusSessionId: null,
-      lastUpdatedAt: null,
-      nextAction: 'Initialize workflow metadata',
-      activeBranch: null,
-      pendingProposalCount: 0,
-      discoverySource: 'codex',
-      discoveryPath: '/Users/light/Projects/foo',
-    } satisfies ProjectSummary;
-    const initializedProject = {
-      ...codexProject,
-      initialized: true,
-      status: 'todo',
-      discoverySource: 'parallel',
-      discoveryPath: null,
-    } satisfies ProjectSummary;
-
-    expect(projectDiscoverySubtitle(codexProject)).toBe('Codex activity');
-    expect(projectDiscoverySubtitle({
-      ...codexProject,
-      discoverySource: 'claude',
-    })).toBe('Claude Code activity');
-    expect(projectDiscoverySubtitle({
-      ...codexProject,
-      discoverySource: null,
-      discoveryPath: null,
-    })).toBeNull();
-    expect(projectDiscoverySubtitle(initializedProject)).toBeNull();
-  });
-
 });
