@@ -173,7 +173,7 @@ pub fn project_summary(root: &str) -> Result<ProjectSummary> {
         }
     }
 
-    let summary = if path_exists(get_workflow_paths(&root).workflow_dir) {
+    let summary = if path_exists(get_workflow_paths(&root).manifest_path) {
         build_initialized_summary(&root)?
     } else {
         build_uninitialized_summary(&root)?
@@ -615,6 +615,53 @@ mod tests {
     }
 
     #[test]
+    fn refresh_keeps_codex_backed_projects_visible_when_manifest_is_missing() -> Result<()> {
+        let temp = tempdir()?;
+        let watched_root = temp.path().join("watched");
+        let project_root = watched_root.join("broken-project");
+        fs::create_dir_all(project_root.join(".git"))?;
+        fs::write(project_root.join(".git/HEAD"), "ref: refs/heads/main\n")?;
+        fs::create_dir_all(project_root.join(".project-workflow"))?;
+
+        let codex_home = temp.path().join(".codex");
+        fs::create_dir_all(&codex_home)?;
+        let codex_db = codex_home.join("state_11.sqlite");
+        let codex = rusqlite::Connection::open(&codex_db)?;
+        codex.execute_batch(
+            r#"
+            CREATE TABLE threads (
+              cwd TEXT,
+              archived INTEGER NOT NULL DEFAULT 0
+            );
+            "#,
+        )?;
+        codex.execute(
+            "INSERT INTO threads (cwd, archived) VALUES (?1, 0)",
+            rusqlite::params![project_root.display().to_string()],
+        )?;
+
+        let index_db = temp.path().join("workflow-index.sqlite");
+        let summaries = with_home(temp.path(), || {
+            list_projects(
+                &[watched_root.display().to_string()],
+                index_db.to_string_lossy().as_ref(),
+            )
+        })?;
+
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(
+            summaries[0].root,
+            fs::canonicalize(&project_root)?.to_string_lossy()
+        );
+        assert!(!summaries[0].initialized);
+        assert_eq!(
+            summaries[0].discovery_source,
+            Some(crate::DiscoverySource::Codex)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn indexed_snapshot_round_trips_provenance_without_refresh() -> Result<()> {
         let temp = tempdir()?;
         let watched_root = temp.path().join("watched");
@@ -657,6 +704,46 @@ mod tests {
             Some(crate::DiscoverySource::Codex)
         );
         assert_eq!(indexed[0].discovery_path, None);
+        Ok(())
+    }
+
+    #[test]
+    fn indexed_snapshot_degrades_when_manifest_is_missing() -> Result<()> {
+        let temp = tempdir()?;
+        let watched_root = temp.path().join("watched");
+        fs::create_dir_all(&watched_root)?;
+
+        let project_root = watched_root.join("parallel-project");
+        fs::create_dir_all(project_root.join(".git"))?;
+        fs::write(project_root.join(".git/HEAD"), "ref: refs/heads/main\n")?;
+
+        let index_db = temp
+            .path()
+            .join("workflow-index.sqlite")
+            .display()
+            .to_string();
+        crate::init_project(InitProjectInput {
+            root: project_root.display().to_string(),
+            actor: "tester".to_string(),
+            source: ActivitySource::Cli,
+            name: Some("Parallel Project".to_string()),
+            kind: None,
+            owner: None,
+            tags: None,
+            index_db_path: index_db.clone(),
+        })?;
+
+        let roots = vec![watched_root.display().to_string()];
+        let _ = list_projects(&roots, &index_db)?;
+        fs::remove_file(get_workflow_paths(&project_root).manifest_path)?;
+
+        let indexed = list_indexed_projects(&roots, &index_db)?;
+        assert_eq!(indexed.len(), 1);
+        assert_eq!(
+            indexed[0].root,
+            fs::canonicalize(&project_root)?.to_string_lossy()
+        );
+        assert!(!indexed[0].initialized);
         Ok(())
     }
 }

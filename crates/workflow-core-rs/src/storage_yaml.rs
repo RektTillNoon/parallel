@@ -13,7 +13,6 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct WorkflowPaths {
-    pub workflow_dir: PathBuf,
     pub local_dir: PathBuf,
     pub manifest_path: PathBuf,
     pub plan_path: PathBuf,
@@ -31,7 +30,6 @@ pub fn get_workflow_paths(root: impl AsRef<Path>) -> WorkflowPaths {
     let local_dir = workflow_dir.join("local");
 
     WorkflowPaths {
-        workflow_dir: workflow_dir.clone(),
         local_dir: local_dir.clone(),
         manifest_path: workflow_dir.join("manifest.yaml"),
         plan_path: workflow_dir.join("plan.yaml"),

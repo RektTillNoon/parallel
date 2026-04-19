@@ -505,7 +505,7 @@ fn build_uninitialized_project_summary(root: &str) -> Result<ProjectSummary> {
 }
 
 fn build_project_summary(root: &str) -> Result<ProjectSummary> {
-    if path_exists(get_workflow_paths(root).workflow_dir) {
+    if path_exists(get_workflow_paths(root).manifest_path) {
         build_initialized_project_summary(root)
     } else {
         build_uninitialized_project_summary(root)
@@ -2237,6 +2237,48 @@ mod tests {
             store.project_watched_root(&canonical_repo)?,
             Some(canonical_watched_root)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn mutation_refresh_degrades_to_uninitialized_when_manifest_is_missing() -> Result<()> {
+        let watched_root_dir = tempdir()?;
+        let watched_root = watched_root_dir.path().join("watched");
+        fs::create_dir_all(&watched_root)?;
+
+        let repo = watched_root.join("repo-one");
+        fs::create_dir_all(repo.join(".git"))?;
+        fs::write(repo.join(".git/HEAD"), "ref: refs/heads/main\n")?;
+
+        let index_db = watched_root.join(".app/index.sqlite").display().to_string();
+        init_project(InitProjectInput {
+            root: repo.display().to_string(),
+            actor: "tester".to_string(),
+            source: ActivitySource::Cli,
+            name: Some("Repo One".to_string()),
+            kind: None,
+            owner: None,
+            tags: None,
+            index_db_path: index_db.clone(),
+        })?;
+
+        let roots = vec![watched_root.display().to_string()];
+        let _ = list_projects(&roots, &index_db)?;
+        fs::remove_file(get_workflow_paths(&repo).manifest_path)?;
+
+        refresh_project_index(
+            repo.display().to_string().as_str(),
+            &index_db,
+            Some(watched_root.display().to_string().as_str()),
+        )?;
+
+        let store = IndexStore::new(index_db)?;
+        let canonical_roots = vec![fs::canonicalize(&watched_root)?
+            .to_string_lossy()
+            .into_owned()];
+        let records = store.list_projects(&canonical_roots)?;
+        assert_eq!(records.len(), 1);
+        assert!(!records[0].summary.initialized);
         Ok(())
     }
 }
