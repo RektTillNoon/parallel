@@ -414,4 +414,65 @@ describe('App auto refresh', () => {
     expect(refreshedProjectButton?.getAttribute('aria-pressed')).toBe('true');
     expect(container.textContent).toContain('Recent activity');
   });
+
+  it('loads agent defaults as global status even when a project is selected', async () => {
+    await renderApp();
+
+    const settingsButton = findButton(container, 'Settings');
+    expect(settingsButton).not.toBeNull();
+
+    await act(async () => {
+      settingsButton?.click();
+      await vi.dynamicImportSettled();
+    });
+    await flush();
+
+    expect(apiMocks.getAgentDefaultsStatus).toHaveBeenCalledWith();
+  });
+
+  it('applies agent defaults globally from settings instead of scoping them to the selected repo', async () => {
+    apiMocks.getCliInstallStatus.mockResolvedValue({
+      bundledPath: '/Applications/parallel.app/Contents/MacOS/projectctl',
+      installPath: '/Users/light/bin/projectctl',
+      installed: true,
+      installDirOnPath: true,
+      shellProfileConfigured: false,
+      shellExport: 'export PATH="$HOME/bin:$PATH"',
+      shellProfile: '$HOME/.zshrc',
+      persistCommand: 'echo \'export PATH="$HOME/bin:$PATH"\' >> $HOME/.zshrc',
+    });
+    apiMocks.getAgentDefaultsStatus.mockResolvedValue([
+      {
+        kind: 'codex',
+        label: 'Codex',
+        status: 'missing',
+        reasons: [],
+        global: null,
+        repo: null,
+        changedPaths: [],
+      },
+    ]);
+
+    await renderApp();
+
+    const settingsButton = findButton(container, 'Settings');
+    expect(settingsButton).not.toBeNull();
+
+    await act(async () => {
+      settingsButton?.click();
+      await vi.dynamicImportSettled();
+    });
+    await flush();
+
+    const installButton = findButton(container, 'Install');
+    expect(installButton).not.toBeNull();
+
+    await act(async () => {
+      installButton?.click();
+    });
+    await flush();
+
+    expect(apiMocks.applyAgentDefaults).toHaveBeenCalledWith('codex', 'install');
+    expect(apiMocks.getAgentDefaultsStatus).toHaveBeenLastCalledWith();
+  });
 });

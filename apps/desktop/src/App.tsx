@@ -397,7 +397,7 @@ export default function App() {
       try {
         const [status, nextAgentStatuses] = await Promise.all([
           getCliInstallStatus(),
-          getAgentDefaultsStatus(selectedRoot),
+          getAgentDefaultsStatus(),
         ]);
         if (active) {
           setCliStatus(status);
@@ -414,7 +414,6 @@ export default function App() {
       active = false;
     };
   }, [
-    selectedRoot,
     settingsOpen,
     state?.mcpRuntime.boundPort,
     state?.settings.mcp.port,
@@ -580,7 +579,7 @@ export default function App() {
   const handleCopyBridgeSnippet = useCallback(async (kind: string) => {
     setError(null);
     try {
-      const snippets = await getBridgeClientSnippets(kind, selectedRootRef.current);
+      const snippets = await getBridgeClientSnippets(kind);
       const [snippet] = snippets;
       if (!snippet) {
         throw new Error(`No snippet returned for ${kind}`);
@@ -595,7 +594,7 @@ export default function App() {
   const handleCopyCodexTokenExport = useCallback(async () => {
     setError(null);
     try {
-      const snippets = await getBridgeClientSnippets('codex', selectedRootRef.current);
+      const snippets = await getBridgeClientSnippets('codex');
       const exportLine = snippets[0]?.content.split('\n')[0]?.trim();
       if (!exportLine) {
         throw new Error('No Codex token export available');
@@ -612,8 +611,8 @@ export default function App() {
       setError(null);
       setAgentPendingKind(kind);
       try {
-        await applyAgentDefaults(kind, action, selectedRootRef.current);
-        const nextStatuses = await getAgentDefaultsStatus(selectedRootRef.current);
+        await applyAgentDefaults(kind, action);
+        const nextStatuses = await getAgentDefaultsStatus();
         setAgentStatuses(nextStatuses);
       } catch (mutationError) {
         setError(mutationError instanceof Error ? mutationError.message : String(mutationError));
