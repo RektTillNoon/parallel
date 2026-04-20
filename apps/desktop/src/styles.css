@@ -225,17 +225,13 @@ code {
 .switcher-item:hover:not(:disabled) {
   color: var(--ink);
   background: color-mix(in oklab, var(--ink) 4%, transparent);
-  border-color: transparent;
+  border-color: color-mix(in oklab, var(--line-strong) 72%, transparent);
 }
 
 .switcher-item.is-selected {
   color: var(--ink);
-  background: var(--accent-soft);
-  border-color: color-mix(in oklab, var(--accent) 22%, transparent);
-}
-
-.switcher-item.is-selected .switcher-name {
-  color: var(--accent-ink);
+  background: color-mix(in oklab, var(--surface) 88%, transparent);
+  border-color: color-mix(in oklab, var(--line-strong) 72%, transparent);
 }
 
 .switcher-dot {
@@ -491,24 +487,9 @@ code {
 }
 
 .focus-project {
-  position: relative;
   font-size: 0.95rem;
   font-weight: 600;
   color: var(--ink);
-  padding-left: 0.8rem;
-}
-
-.focus-project::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-halo);
 }
 
 .focus-meta {
@@ -686,7 +667,8 @@ code {
 .focus-path {
   font-family: var(--font-mono);
   font-size: 0.78rem;
-  color: var(--subtle);
+  color: var(--ink);
+  opacity: 0.82;
   word-break: break-all;
 }
 

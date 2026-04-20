@@ -113,6 +113,9 @@ describe('single-focus design system', () => {
     expect(styles).toMatch(/\.switcher-dot\s*{[\s\S]*background:\s*var\(--warn\);/s);
     expect(styles).toMatch(/\.switcher-dot\s*{[\s\S]*box-shadow:\s*0 0 10px/);
     expect(styles).toMatch(
+      /\.switcher-item:hover:not\(:disabled\)\s*{[\s\S]*border-color:\s*color-mix\(in oklab,\s*var\(--line-strong\)\s*72%,\s*transparent\);/s,
+    );
+    expect(styles).toMatch(
       /\.switcher-dot\[data-status="live"\][\s\S]*background:\s*var\(--good\);/s,
     );
     expect(styles).toMatch(
@@ -127,7 +130,13 @@ describe('single-focus design system', () => {
     expect(styles).toMatch(
       /\.switcher-dot\[data-status="uninitialized"\][\s\S]*background:\s*var\(--danger\);/s,
     );
-    expect(styles).toMatch(/\.switcher-item\.is-selected\s*{[\s\S]*background:\s*var\(--accent-soft\);/s);
+    expect(styles).toMatch(
+      /\.switcher-item\.is-selected\s*{[\s\S]*background:\s*color-mix\(in oklab,\s*var\(--surface\)\s*88%,\s*transparent\);/s,
+    );
+    expect(styles).not.toMatch(/\.switcher-item\.is-selected\s+\.\switcher-name\s*{[\s\S]*var\(--accent-ink\)/s);
+    expect(styles).not.toMatch(/\.focus-project::before\b/);
+    expect(styles).toMatch(/\.focus-path\s*{[\s\S]*color:\s*var\(--ink\);/s);
+    expect(styles).toMatch(/\.focus-path\s*{[\s\S]*opacity:\s*0\.82;/s);
   });
 
   it('honors reduced-motion and keeps body overflow well-behaved', () => {
