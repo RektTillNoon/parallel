@@ -17,26 +17,17 @@ float hash(vec2 p) {
   return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
 }
 
-float waveBand(vec2 p, float t, float offset, float amplitude, float frequency, float width) {
-  float wave = sin(p.x * frequency + t * 1.35 + offset * 6.0) * amplitude;
-  wave += sin(p.x * (frequency * 0.58) - t * 0.72 + offset * 9.0) * amplitude * 0.52;
-  wave += cos(p.x * (frequency * 0.25) + t * 0.24) * amplitude * 0.28;
-  float band = abs(p.y + wave - offset);
-  return smoothstep(width, 0.0, band);
+float mistOrb(vec2 p, vec2 center, vec2 stretch, float blur) {
+  vec2 q = (p - center) / stretch;
+  float dist = dot(q, q);
+  return exp(-dist * blur);
 }
 
-float foamField(vec2 p, float t) {
-  float low = waveBand(p + vec2(0.08 * sin(t * 0.18), 0.0), t, -0.54, 0.13, 2.4, 0.34);
-  float mid = waveBand(p, t, -0.16, 0.09, 4.1, 0.24);
-  float crest = waveBand(p + vec2(0.03 * cos(t * 0.37), 0.0), t, 0.28, 0.05, 6.8, 0.12);
-  return low * 0.38 + mid * 0.72 + crest * 0.96;
-}
-
-float kintsugiSeam(vec2 p, float t, float bend, float offset, float width) {
-  float seam = p.y + p.x * bend;
-  seam += sin(p.x * (5.0 + bend * 4.0) + t * 0.42 + offset * 12.0) * 0.052;
-  seam += sin(p.x * 12.5 - t * 0.21 + offset * 18.0) * 0.018;
-  return smoothstep(width, 0.0, abs(seam - offset));
+float rippleField(vec2 p, float t) {
+  float wave = sin(p.x * 1.8 + t * 0.8);
+  wave += sin(p.y * 2.3 - t * 0.6);
+  wave += sin((p.x + p.y) * 1.35 + t * 0.45);
+  return wave / 3.0;
 }
 
 void main() {
@@ -44,44 +35,37 @@ void main() {
   vec2 p = uv * 2.0 - 1.0;
   p.x *= u_resolution.x / u_resolution.y;
 
-  float t = u_time * 0.095;
+  float t = u_time * 0.085;
 
-  vec3 aiBase = vec3(0.018, 0.03, 0.07);
-  vec3 deepWater = vec3(0.03, 0.14, 0.2);
-  vec3 seijiFoam = vec3(0.54, 0.76, 0.74);
-  vec3 kinGold = vec3(0.89, 0.72, 0.34);
-  vec3 warmShell = vec3(0.97, 0.91, 0.8);
-  vec3 urushiNight = vec3(0.014, 0.015, 0.03);
+  vec3 sumiInk = vec3(0.03, 0.038, 0.075);
+  vec3 sakuraMist = vec3(0.97, 0.78, 0.82);
+  vec3 seijiMint = vec3(0.72, 0.88, 0.82);
+  vec3 aizome = vec3(0.35, 0.5, 0.82);
+  vec3 shojiGlow = vec3(0.98, 0.96, 0.91);
 
-  float depthLift = smoothstep(-1.0, 0.85, p.y);
-  vec3 base = mix(aiBase, deepWater, depthLift * 0.82);
+  vec2 flow = vec2(rippleField(p * 0.9, t), rippleField(p.yx * 1.1, t + 1.3));
+  vec2 drifted = p + flow * 0.08;
 
-  float foam = foamField(p, t);
-  float trailingWave = waveBand(p + vec2(0.0, 0.04 * sin(t * 0.3)), t, 0.46, 0.035, 8.4, 0.085);
-  float tideShadow = waveBand(p, t, -0.7, 0.14, 2.1, 0.5);
+  float orbA = mistOrb(drifted, vec2(-0.58 + sin(t * 0.7) * 0.12, -0.22 + cos(t * 0.9) * 0.08), vec2(0.72, 0.86), 2.2);
+  float orbB = mistOrb(drifted, vec2(0.48 + cos(t * 0.55) * 0.14, -0.36 + sin(t * 0.7) * 0.12), vec2(0.8, 0.72), 2.0);
+  float orbC = mistOrb(drifted, vec2(-0.08 + sin(t * 0.4) * 0.1, 0.52 + cos(t * 0.6) * 0.08), vec2(1.05, 0.65), 2.4);
+  float orbD = mistOrb(drifted, vec2(0.0, 0.06 + sin(t * 0.5) * 0.06), vec2(1.35, 1.0), 3.4);
 
-  float mistLine = exp(-pow((p.y + 0.58 + 0.05 * sin(t * 0.26 + p.x * 1.8)) * 3.2, 2.0));
-  float trench = 1.0 - smoothstep(-0.95, -0.12, p.y);
-  float vignette = 1.0 - dot(uv - 0.5, uv - 0.5) * 0.92;
-  float grain = (hash(gl_FragCoord.xy * 0.48 + t * 23.0) - 0.5) * 0.028;
+  float horizon = smoothstep(-1.0, 0.55, p.y);
+  float glowBand = exp(-pow((p.y + 0.08 + flow.x * 0.12) * 2.4, 2.0));
+  float grain = (hash(gl_FragCoord.xy * 0.42 + t * 17.0) - 0.5) * 0.016;
+  float vignette = 1.0 - dot(uv - 0.5, uv - 0.5) * 0.72;
 
-  base += seijiFoam * mistLine * 0.18;
-  base = mix(base, urushiNight, tideShadow * 0.2 + trench * 0.24);
+  vec3 base = mix(sumiInk, aizome, horizon * 0.48);
 
-  float seamPrimary = kintsugiSeam(p, t, 0.18, -0.12, 0.024);
-  float seamBranch = kintsugiSeam(p + vec2(0.14, -0.08), t, -0.22, 0.18, 0.014);
-  float seamAccent = kintsugiSeam(p + vec2(-0.12, 0.18), t, 0.08, 0.46, 0.016);
-  float seam = seamPrimary * 0.88 + seamBranch * 0.54 + seamAccent * 0.36;
-  float seamPulse = 0.72 + 0.28 * sin(p.x * 5.0 - t * 1.4);
+  vec3 glow = sakuraMist * orbA * 0.34;
+  glow += seijiMint * orbB * 0.3;
+  glow += aizome * orbC * 0.26;
+  glow += shojiGlow * orbD * 0.18;
+  glow += shojiGlow * glowBand * 0.08;
 
-  vec3 foamGlow = seijiFoam * (foam * 0.34 + trailingWave * 0.22);
-  foamGlow += warmShell * pow(trailingWave, 2.0) * 0.08;
-
-  vec3 seamGlow = kinGold * seam * (0.82 + seamPulse * 0.34);
-  seamGlow += warmShell * pow(seam, 2.3) * 0.24;
-
-  vec3 result = base + foamGlow + seamGlow;
-  result *= 0.94 + vignette * 0.2;
+  vec3 result = base + glow;
+  result *= 0.94 + vignette * 0.18;
   result += grain;
 
   gl_FragColor = vec4(result, 1.0);
@@ -141,7 +125,7 @@ export default function ShaderBackdrop() {
     const resolutionLocation = gl.getUniformLocation(program, 'u_resolution');
     const timeLocation = gl.getUniformLocation(program, 'u_time');
 
-    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.75);
 
     function resize() {
       if (!canvas) return;

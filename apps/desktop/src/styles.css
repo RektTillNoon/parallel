@@ -72,18 +72,19 @@ body {
   height: 100%;
   z-index: 0;
   pointer-events: none;
-  opacity: 0.58;
+  opacity: 0.56;
   mix-blend-mode: screen;
+  filter: saturate(1.08) brightness(1.03);
   -webkit-mask-image: radial-gradient(
-    ellipse 92% 82% at 54% 42%,
+    ellipse 90% 80% at 52% 40%,
     rgba(0, 0, 0, 0.96) 0%,
-    rgba(0, 0, 0, 0.8) 46%,
+    rgba(0, 0, 0, 0.8) 44%,
     rgba(0, 0, 0, 0.3) 100%
   );
   mask-image: radial-gradient(
-    ellipse 92% 82% at 54% 42%,
+    ellipse 90% 80% at 52% 40%,
     rgba(0, 0, 0, 0.96) 0%,
-    rgba(0, 0, 0, 0.8) 46%,
+    rgba(0, 0, 0, 0.8) 44%,
     rgba(0, 0, 0, 0.3) 100%
   );
 }
