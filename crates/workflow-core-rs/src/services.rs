@@ -301,56 +301,158 @@ fn get_next_actionable_step(plan: &Plan) -> Option<(usize, usize, &Phase, &Step)
     None
 }
 
-fn normalize_plan_in_progress_states(plan: &mut Plan, active_step_id: Option<&str>) {
-    for phase in &mut plan.phases {
-        for step in &mut phase.steps {
-            if active_step_id == Some(step.id.as_str()) {
-                continue;
-            }
-            if matches!(step.status, StepStatus::InProgress | StepStatus::Blocked) {
-                step.status = if step.completed_at.is_some() {
-                    StepStatus::Done
-                } else {
-                    StepStatus::Todo
-                };
-            }
-            if step.owner_session_id.is_some() && active_step_id != Some(step.id.as_str()) {
-                step.owner_session_id = None;
-            }
-        }
-    }
-}
-
 fn reconcile_sessions_and_plan(plan: &mut Plan, sessions: &mut SessionsFile) {
-    let step_ids: HashSet<String> = get_all_steps(plan)
+    let step_map: HashMap<String, bool> = get_all_steps(plan)
         .iter()
-        .map(|step| step.id.clone())
-        .collect();
-    let session_ids: HashSet<String> = sessions
-        .sessions
-        .iter()
-        .map(|session| session.id.clone())
+        .map(|step| (step.id.clone(), step.status == StepStatus::Done))
         .collect();
 
     for session in &mut sessions.sessions {
         if let Some(owned_step_id) = &session.owned_step_id {
-            if !step_ids.contains(owned_step_id) {
+            if session.status != SessionStatus::Active
+                || step_map.get(owned_step_id).copied().unwrap_or(true)
+            {
                 session.owned_step_id = None;
             }
         }
         session
             .observed_step_ids
-            .retain(|step_id| step_ids.contains(step_id));
+            .retain(|step_id| step_map.contains_key(step_id));
     }
+
+    let session_ownership: HashMap<String, String> = sessions
+        .sessions
+        .iter()
+        .filter(|session| session.status == SessionStatus::Active)
+        .filter_map(|session| {
+            session
+                .owned_step_id
+                .as_ref()
+                .map(|step_id| (session.id.clone(), step_id.clone()))
+        })
+        .collect();
 
     for phase in &mut plan.phases {
         for step in &mut phase.steps {
+            if step.status == StepStatus::Done {
+                step.owner_session_id = None;
+                continue;
+            }
             if let Some(owner_session_id) = &step.owner_session_id {
-                if !session_ids.contains(owner_session_id) {
+                let owns_matching_step = session_ownership
+                    .get(owner_session_id)
+                    .map(|owned_step_id| owned_step_id == &step.id)
+                    .unwrap_or(false);
+                if !owns_matching_step {
                     step.owner_session_id = None;
                 }
             }
         }
+    }
+
+    for session in &mut sessions.sessions {
+        if let Some(owned_step_id) = &session.owned_step_id {
+            let mirrored = locate_step(plan, owned_step_id)
+                .map(|(_, _, _, step)| step.owner_session_id.as_deref() == Some(session.id.as_str()))
+                .unwrap_or(false);
+            if !mirrored {
+                session.owned_step_id = None;
+            }
+        }
+    }
+}
+
+fn normalize_plan_execution_states(
+    plan: &mut Plan,
+    sessions: &SessionsFile,
+    blockers: &[String],
+) {
+    let active_owned_steps: HashSet<String> = sessions
+        .sessions
+        .iter()
+        .filter(|session| session.status == SessionStatus::Active)
+        .filter_map(|session| session.owned_step_id.clone())
+        .collect();
+
+    for phase in &mut plan.phases {
+        for step in &mut phase.steps {
+            if step.status == StepStatus::Done {
+                step.owner_session_id = None;
+                continue;
+            }
+
+            let has_valid_owner = step
+                .owner_session_id
+                .as_ref()
+                .map(|_| active_owned_steps.contains(&step.id))
+                .unwrap_or(false);
+
+            if has_valid_owner {
+                step.status = if blockers.is_empty() {
+                    StepStatus::InProgress
+                } else {
+                    StepStatus::Blocked
+                };
+            } else {
+                step.owner_session_id = None;
+                step.status = StepStatus::Todo;
+            }
+        }
+    }
+}
+
+fn active_session<'a>(sessions: &'a SessionsFile, session_id: &str) -> Option<&'a WorkflowSession> {
+    sessions
+        .sessions
+        .iter()
+        .find(|session| session.status == SessionStatus::Active && session.id == session_id)
+}
+
+fn most_recent_active_session<'a>(
+    plan: &Plan,
+    sessions: &'a SessionsFile,
+    require_owned_step: bool,
+) -> Option<&'a WorkflowSession> {
+    sessions
+        .sessions
+        .iter()
+        .filter(|session| session.status == SessionStatus::Active)
+        .filter(|session| !require_owned_step || session_owned_step(plan, sessions, &session.id).is_some())
+        .max_by(|left, right| left.last_updated_at.cmp(&right.last_updated_at))
+}
+
+fn any_active_owned_step(plan: &Plan) -> bool {
+    get_all_steps(plan)
+        .iter()
+        .any(|step| step.status != StepStatus::Done && step.owner_session_id.is_some())
+}
+
+fn session_owned_step<'a>(
+    plan: &'a Plan,
+    sessions: &SessionsFile,
+    session_id: &str,
+) -> Option<(usize, usize, &'a Phase, &'a Step)> {
+    let session = active_session(sessions, session_id)?;
+    let step_id = session.owned_step_id.as_deref()?;
+    let located = locate_step(plan, step_id)?;
+    if located.3.status == StepStatus::Done || located.3.owner_session_id.as_deref() != Some(session_id)
+    {
+        return None;
+    }
+    Some(located)
+}
+
+fn runtime_next_action_for_step(step: &Step) -> String {
+    if step.owner_session_id.is_some() {
+        if !step.summary.is_empty() {
+            step.summary.clone()
+        } else if let Some(detail) = step.details.first() {
+            detail.clone()
+        } else {
+            format!("Continue \"{}\"", step.title)
+        }
+    } else {
+        format!("Start \"{}\"", step.title)
     }
 }
 
@@ -362,28 +464,39 @@ fn refresh_runtime_state(
     now: &str,
 ) -> RuntimeState {
     reconcile_sessions_and_plan(plan, sessions);
+    normalize_plan_execution_states(plan, sessions, &runtime.blockers);
 
-    let current = runtime
-        .current_step_id
-        .as_deref()
-        .and_then(|step_id| locate_step(plan, step_id))
-        .filter(|(_, _, _, step)| step.status != StepStatus::Done)
-        .or_else(|| get_next_actionable_step(plan));
-
-    let focus_session_id = current
-        .as_ref()
-        .and_then(|(_, _, _, step)| step.owner_session_id.clone())
+    let focus_session_id = runtime
+        .focus_session_id
+        .clone()
+        .filter(|session_id| active_session(sessions, session_id).is_some())
         .or_else(|| {
-            runtime.focus_session_id.clone().filter(|session_id| {
-                sessions
-                    .sessions
-                    .iter()
-                    .any(|session| session.id == *session_id)
-            })
+            most_recent_active_session(plan, sessions, true).map(|session| session.id.clone())
+        })
+        .or_else(|| {
+            most_recent_active_session(plan, sessions, false).map(|session| session.id.clone())
         });
+
+    let current = focus_session_id
+        .as_deref()
+        .and_then(|session_id| session_owned_step(plan, sessions, session_id))
+        .or_else(|| {
+            if any_active_owned_step(plan) {
+                None
+            } else {
+                runtime
+                    .current_step_id
+                    .as_deref()
+                    .and_then(|step_id| locate_step(plan, step_id))
+                    .filter(|(_, _, _, step)| step.status != StepStatus::Done)
+            }
+        })
+        .or_else(|| get_next_actionable_step(plan));
 
     let status = if !runtime.blockers.is_empty() {
         StepStatus::Blocked
+    } else if any_active_owned_step(plan) {
+        StepStatus::InProgress
     } else {
         current
             .as_ref()
@@ -391,21 +504,10 @@ fn refresh_runtime_state(
             .unwrap_or(StepStatus::Done)
     };
 
-    let next_action = if let Some((_, _, _, step)) = &current {
-        if step.owner_session_id.is_some() {
-            if !step.summary.is_empty() {
-                step.summary.clone()
-            } else if let Some(detail) = step.details.first() {
-                detail.clone()
-            } else {
-                format!("Continue \"{}\"", step.title)
-            }
-        } else {
-            format!("Start \"{}\"", step.title)
-        }
-    } else {
-        "No remaining steps".to_string()
-    };
+    let next_action = current
+        .as_ref()
+        .map(|(_, _, _, step)| runtime_next_action_for_step(step))
+        .unwrap_or_else(|| "No remaining steps".to_string());
 
     RuntimeState {
         version: 2,
@@ -1119,7 +1221,7 @@ pub fn ensure_session(input: EnsureSessionInput) -> Result<ProjectDetail> {
             summary: format!("Ensured session \"{}\"", session.title),
             event_type: "session.ensured".to_string(),
             payload: json!({ "sessionId": session.id }),
-            write_plan: None,
+            write_plan: Some(data.plan),
             write_runtime: Some(next_runtime),
             write_sessions: Some(data.sessions),
             write_proposals: None,
@@ -1226,16 +1328,11 @@ pub fn start_step(
         }
 
         release_ownership(&mut data.plan, &session.id);
-        normalize_plan_in_progress_states(&mut data.plan, Some(step_id));
         let (phase_index_mut, step_index_mut) = locate_step_indices(&data.plan, step_id).unwrap();
         {
             let step = &mut data.plan.phases[phase_index_mut].steps[step_index_mut];
             step.owner_session_id = Some(session.id.clone());
-            step.status = if data.runtime.blockers.is_empty() {
-                StepStatus::InProgress
-            } else {
-                StepStatus::Blocked
-            };
+            step.status = StepStatus::InProgress;
             step.completed_at = None;
             step.completed_by = None;
         }
@@ -1383,16 +1480,6 @@ pub fn add_blocker(
         if !blockers.iter().any(|candidate| candidate == blocker) {
             blockers.push(blocker.to_string());
         }
-        let current_step_id = data.runtime.current_step_id.clone();
-        if let Some(step_id) = &current_step_id {
-            if let Some((phase_index, step_index)) = locate_step_indices(&data.plan, step_id) {
-                let step = &mut data.plan.phases[phase_index].steps[step_index];
-                step.status = StepStatus::Blocked;
-                if step.owner_session_id.is_none() {
-                    step.owner_session_id = Some(session.id.clone());
-                }
-            }
-        }
         let next_runtime = refresh_runtime_state(
             &mut data.plan,
             &RuntimeState {
@@ -1405,6 +1492,7 @@ pub fn add_blocker(
             branch,
             &now,
         );
+        let current_step_id = next_runtime.current_step_id.clone();
         Ok(MutateProjectResult {
             summary: format!("Added blocker: {blocker}"),
             event_type: "blocker.added".to_string(),
@@ -1447,19 +1535,6 @@ pub fn clear_blocker(
         } else {
             Vec::new()
         };
-        let current_step_id = data.runtime.current_step_id.clone();
-        if let Some(step_id) = &current_step_id {
-            if let Some((phase_index, step_index)) = locate_step_indices(&data.plan, step_id) {
-                let step = &mut data.plan.phases[phase_index].steps[step_index];
-                if blockers.is_empty() && step.status == StepStatus::Blocked {
-                    step.status = if step.owner_session_id.is_some() {
-                        StepStatus::InProgress
-                    } else {
-                        StepStatus::Todo
-                    };
-                }
-            }
-        }
         let next_runtime = refresh_runtime_state(
             &mut data.plan,
             &RuntimeState {
@@ -1472,6 +1547,7 @@ pub fn clear_blocker(
             branch,
             &now,
         );
+        let current_step_id = next_runtime.current_step_id.clone();
         Ok(MutateProjectResult {
             summary: blocker
                 .filter(|value| !value.is_empty())
@@ -1564,7 +1640,7 @@ pub fn update_runtime(input: RuntimePatchInput) -> Result<ProjectDetail> {
                 .clone()
                 .unwrap_or_else(|| "runtime.updated".to_string()),
             payload: Value::Object(input.patch.clone()),
-            write_plan: None,
+            write_plan: Some(data.plan),
             write_runtime: Some(next_runtime.clone()),
             write_sessions: Some(data.sessions),
             write_proposals: None,
@@ -1638,7 +1714,7 @@ pub fn append_activity_event(root: &str, event: AppendActivityInput) -> Result<P
             summary: event.summary.clone(),
             event_type: event.event_type.clone(),
             payload: event.payload.clone().unwrap_or_else(|| json!({})),
-            write_plan: None,
+            write_plan: Some(data.plan),
             write_runtime: Some(next_runtime),
             write_sessions: Some(data.sessions),
             write_proposals: None,
@@ -1693,7 +1769,7 @@ pub fn propose_decision(
             summary: format!("Proposed decision \"{}\"", proposal.title),
             event_type: "decision.proposed".to_string(),
             payload: json!({ "proposalId": next_proposal.id }),
-            write_plan: None,
+            write_plan: Some(data.plan),
             write_runtime: Some(next_runtime.clone()),
             write_sessions: Some(data.sessions),
             write_proposals: Some(next_proposals),
@@ -1936,6 +2012,569 @@ mod tests {
             &index_db,
         )?;
         assert_eq!(completed.plan.phases[0].steps[0].status, StepStatus::Done);
+        Ok(())
+    }
+
+    #[test]
+    fn supports_concurrent_step_ownership_across_sessions() -> Result<()> {
+        let repo = create_real_repo("parallel-project")?;
+        let index_db = Path::new(&repo)
+            .join(".app/index.sqlite")
+            .display()
+            .to_string();
+        init_project(InitProjectInput {
+            root: repo.clone(),
+            actor: "tester".to_string(),
+            source: ActivitySource::Cli,
+            name: Some("Parallel".to_string()),
+            kind: None,
+            owner: None,
+            tags: None,
+            index_db_path: index_db.clone(),
+        })?;
+        let synced = sync_plan(SyncPlanInput {
+            root: repo.clone(),
+            actor: "planner".to_string(),
+            source: ActivitySource::Agent,
+            session_id: None,
+            session_title: Some("Spec sync".to_string()),
+            branch: None,
+            phases: vec![PlanSyncPhaseInput {
+                id: None,
+                title: "Build".to_string(),
+                steps: vec![
+                    PlanSyncStepInput {
+                        id: None,
+                        title: "Capture requirements".to_string(),
+                        summary: Some("Write the initial problem statement.".to_string()),
+                        details: Some(vec!["Capture success criteria.".to_string()]),
+                        depends_on: None,
+                        subtasks: None,
+                    },
+                    PlanSyncStepInput {
+                        id: None,
+                        title: "Draft outline".to_string(),
+                        summary: Some("Draft the outline.".to_string()),
+                        details: Some(vec!["Cover the main sections.".to_string()]),
+                        depends_on: None,
+                        subtasks: None,
+                    },
+                ],
+            }],
+            index_db_path: index_db.clone(),
+        })?;
+        let first_step_id = synced.plan.phases[0].steps[0].id.clone();
+        let second_step_id = synced.plan.phases[0].steps[1].id.clone();
+
+        start_step(
+            &repo,
+            &first_step_id,
+            MutationActor {
+                actor: "agent-1".to_string(),
+                source: ActivitySource::Agent,
+            },
+            SessionContextInput {
+                session_title: Some("Requirements".to_string()),
+                ..SessionContextInput::default()
+            },
+            &index_db,
+        )?;
+
+        let started = start_step(
+            &repo,
+            &second_step_id,
+            MutationActor {
+                actor: "agent-2".to_string(),
+                source: ActivitySource::Agent,
+            },
+            SessionContextInput {
+                session_title: Some("Outline".to_string()),
+                ..SessionContextInput::default()
+            },
+            &index_db,
+        )?;
+
+        let first_step = &started.plan.phases[0].steps[0];
+        let second_step = &started.plan.phases[0].steps[1];
+        assert_eq!(first_step.status, StepStatus::InProgress);
+        assert_eq!(second_step.status, StepStatus::InProgress);
+        assert!(first_step.owner_session_id.is_some());
+        assert!(second_step.owner_session_id.is_some());
+        assert_ne!(first_step.owner_session_id, second_step.owner_session_id);
+        assert_eq!(started.sessions.iter().filter(|session| session.status == SessionStatus::Active).count(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn start_step_releases_only_the_callers_previous_step() -> Result<()> {
+        let repo = create_real_repo("parallel-project")?;
+        let index_db = Path::new(&repo)
+            .join(".app/index.sqlite")
+            .display()
+            .to_string();
+        init_project(InitProjectInput {
+            root: repo.clone(),
+            actor: "tester".to_string(),
+            source: ActivitySource::Cli,
+            name: Some("Parallel".to_string()),
+            kind: None,
+            owner: None,
+            tags: None,
+            index_db_path: index_db.clone(),
+        })?;
+        let synced = sync_plan(SyncPlanInput {
+            root: repo.clone(),
+            actor: "planner".to_string(),
+            source: ActivitySource::Agent,
+            session_id: None,
+            session_title: Some("Spec sync".to_string()),
+            branch: None,
+            phases: vec![PlanSyncPhaseInput {
+                id: None,
+                title: "Build".to_string(),
+                steps: vec![
+                    PlanSyncStepInput {
+                        id: None,
+                        title: "Capture requirements".to_string(),
+                        summary: Some("Write the initial problem statement.".to_string()),
+                        details: Some(vec!["Capture success criteria.".to_string()]),
+                        depends_on: None,
+                        subtasks: None,
+                    },
+                    PlanSyncStepInput {
+                        id: None,
+                        title: "Draft outline".to_string(),
+                        summary: Some("Draft the outline.".to_string()),
+                        details: Some(vec!["Cover the main sections.".to_string()]),
+                        depends_on: None,
+                        subtasks: None,
+                    },
+                    PlanSyncStepInput {
+                        id: None,
+                        title: "Review outline".to_string(),
+                        summary: Some("Review the outline.".to_string()),
+                        details: Some(vec!["Confirm the structure.".to_string()]),
+                        depends_on: None,
+                        subtasks: None,
+                    },
+                ],
+            }],
+            index_db_path: index_db.clone(),
+        })?;
+        let first_step_id = synced.plan.phases[0].steps[0].id.clone();
+        let second_step_id = synced.plan.phases[0].steps[1].id.clone();
+        let third_step_id = synced.plan.phases[0].steps[2].id.clone();
+
+        let session_context = SessionContextInput {
+            session_id: Some("agent-1-session".to_string()),
+            session_title: Some("Requirements".to_string()),
+            ..SessionContextInput::default()
+        };
+        start_step(
+            &repo,
+            &first_step_id,
+            MutationActor {
+                actor: "agent-1".to_string(),
+                source: ActivitySource::Agent,
+            },
+            session_context.clone(),
+            &index_db,
+        )?;
+        start_step(
+            &repo,
+            &second_step_id,
+            MutationActor {
+                actor: "agent-2".to_string(),
+                source: ActivitySource::Agent,
+            },
+            SessionContextInput {
+                session_title: Some("Outline".to_string()),
+                ..SessionContextInput::default()
+            },
+            &index_db,
+        )?;
+
+        let started = start_step(
+            &repo,
+            &third_step_id,
+            MutationActor {
+                actor: "agent-1".to_string(),
+                source: ActivitySource::Agent,
+            },
+            session_context,
+            &index_db,
+        )?;
+
+        let first_step = &started.plan.phases[0].steps[0];
+        let second_step = &started.plan.phases[0].steps[1];
+        let third_step = &started.plan.phases[0].steps[2];
+        assert_eq!(first_step.status, StepStatus::Todo);
+        assert_eq!(first_step.owner_session_id, None);
+        assert_eq!(second_step.status, StepStatus::InProgress);
+        assert!(second_step.owner_session_id.is_some());
+        assert_eq!(third_step.status, StepStatus::InProgress);
+        assert_eq!(third_step.owner_session_id.as_deref(), Some("agent-1-session"));
+        Ok(())
+    }
+
+    #[test]
+    fn starting_another_sessions_step_still_fails() -> Result<()> {
+        let repo = create_real_repo("parallel-project")?;
+        let index_db = Path::new(&repo)
+            .join(".app/index.sqlite")
+            .display()
+            .to_string();
+        init_project(InitProjectInput {
+            root: repo.clone(),
+            actor: "tester".to_string(),
+            source: ActivitySource::Cli,
+            name: Some("Parallel".to_string()),
+            kind: None,
+            owner: None,
+            tags: None,
+            index_db_path: index_db.clone(),
+        })?;
+        let detail = get_project(&repo)?;
+        let first_step_id = detail.plan.phases[0].steps[0].id.clone();
+        start_step(
+            &repo,
+            &first_step_id,
+            MutationActor {
+                actor: "agent-1".to_string(),
+                source: ActivitySource::Agent,
+            },
+            SessionContextInput {
+                session_title: Some("Requirements".to_string()),
+                ..SessionContextInput::default()
+            },
+            &index_db,
+        )?;
+
+        let error = start_step(
+            &repo,
+            &first_step_id,
+            MutationActor {
+                actor: "agent-2".to_string(),
+                source: ActivitySource::Agent,
+            },
+            SessionContextInput {
+                session_title: Some("Competing session".to_string()),
+                ..SessionContextInput::default()
+            },
+            &index_db,
+        )
+        .expect_err("different session should not steal step ownership");
+
+        assert!(error
+            .to_string()
+            .contains("owned by another session"));
+        Ok(())
+    }
+
+    #[test]
+    fn orphaned_owned_steps_demote_to_todo_on_refresh() -> Result<()> {
+        let repo = create_real_repo("parallel-project")?;
+        let index_db = Path::new(&repo)
+            .join(".app/index.sqlite")
+            .display()
+            .to_string();
+        init_project(InitProjectInput {
+            root: repo.clone(),
+            actor: "tester".to_string(),
+            source: ActivitySource::Cli,
+            name: Some("Parallel".to_string()),
+            kind: None,
+            owner: None,
+            tags: None,
+            index_db_path: index_db.clone(),
+        })?;
+        let detail = get_project(&repo)?;
+        let first_step_id = detail.plan.phases[0].steps[0].id.clone();
+        start_step(
+            &repo,
+            &first_step_id,
+            MutationActor {
+                actor: "agent-1".to_string(),
+                source: ActivitySource::Agent,
+            },
+            SessionContextInput {
+                session_id: Some("agent-1-session".to_string()),
+                session_title: Some("Requirements".to_string()),
+                ..SessionContextInput::default()
+            },
+            &index_db,
+        )?;
+
+        let paths = get_workflow_paths(&repo);
+        let mut sessions = read_sessions(&repo)?;
+        sessions.sessions.clear();
+        write_yaml_atomic(paths.sessions_path, &sessions)?;
+
+        let refreshed = add_note(
+            &repo,
+            "refresh",
+            MutationActor {
+                actor: "agent-2".to_string(),
+                source: ActivitySource::Agent,
+            },
+            SessionContextInput {
+                session_title: Some("Observer".to_string()),
+                ..SessionContextInput::default()
+            },
+            &index_db,
+        )?;
+
+        let first_step = &refreshed.plan.phases[0].steps[0];
+        assert_eq!(first_step.owner_session_id, None);
+        assert_eq!(first_step.status, StepStatus::Todo);
+        Ok(())
+    }
+
+    #[test]
+    fn blockers_update_all_owned_steps_without_reassigning_them() -> Result<()> {
+        let repo = create_real_repo("parallel-project")?;
+        let index_db = Path::new(&repo)
+            .join(".app/index.sqlite")
+            .display()
+            .to_string();
+        init_project(InitProjectInput {
+            root: repo.clone(),
+            actor: "tester".to_string(),
+            source: ActivitySource::Cli,
+            name: Some("Parallel".to_string()),
+            kind: None,
+            owner: None,
+            tags: None,
+            index_db_path: index_db.clone(),
+        })?;
+        let synced = sync_plan(SyncPlanInput {
+            root: repo.clone(),
+            actor: "planner".to_string(),
+            source: ActivitySource::Agent,
+            session_id: None,
+            session_title: Some("Spec sync".to_string()),
+            branch: None,
+            phases: vec![PlanSyncPhaseInput {
+                id: None,
+                title: "Build".to_string(),
+                steps: vec![
+                    PlanSyncStepInput {
+                        id: None,
+                        title: "Capture requirements".to_string(),
+                        summary: Some("Write the initial problem statement.".to_string()),
+                        details: Some(vec!["Capture success criteria.".to_string()]),
+                        depends_on: None,
+                        subtasks: None,
+                    },
+                    PlanSyncStepInput {
+                        id: None,
+                        title: "Draft outline".to_string(),
+                        summary: Some("Draft the outline.".to_string()),
+                        details: Some(vec!["Cover the main sections.".to_string()]),
+                        depends_on: None,
+                        subtasks: None,
+                    },
+                ],
+            }],
+            index_db_path: index_db.clone(),
+        })?;
+        let first_step_id = synced.plan.phases[0].steps[0].id.clone();
+        let second_step_id = synced.plan.phases[0].steps[1].id.clone();
+
+        let first = start_step(
+            &repo,
+            &first_step_id,
+            MutationActor {
+                actor: "agent-1".to_string(),
+                source: ActivitySource::Agent,
+            },
+            SessionContextInput {
+                session_id: Some("agent-1-session".to_string()),
+                session_title: Some("Requirements".to_string()),
+                ..SessionContextInput::default()
+            },
+            &index_db,
+        )?;
+        let first_owner = first.plan.phases[0].steps[0]
+            .owner_session_id
+            .clone()
+            .expect("owner assigned");
+
+        let second = start_step(
+            &repo,
+            &second_step_id,
+            MutationActor {
+                actor: "agent-2".to_string(),
+                source: ActivitySource::Agent,
+            },
+            SessionContextInput {
+                session_id: Some("agent-2-session".to_string()),
+                session_title: Some("Outline".to_string()),
+                ..SessionContextInput::default()
+            },
+            &index_db,
+        )?;
+        let second_owner = second.plan.phases[0].steps[1]
+            .owner_session_id
+            .clone()
+            .expect("owner assigned");
+
+        let blocked = add_blocker(
+            &repo,
+            "Need sign-off",
+            MutationActor {
+                actor: "agent-3".to_string(),
+                source: ActivitySource::Agent,
+            },
+            SessionContextInput {
+                session_title: Some("Blocker".to_string()),
+                ..SessionContextInput::default()
+            },
+            &index_db,
+        )?;
+        assert_eq!(blocked.plan.phases[0].steps[0].status, StepStatus::Blocked);
+        assert_eq!(blocked.plan.phases[0].steps[1].status, StepStatus::Blocked);
+        assert_eq!(blocked.plan.phases[0].steps[0].owner_session_id.as_deref(), Some(first_owner.as_str()));
+        assert_eq!(blocked.plan.phases[0].steps[1].owner_session_id.as_deref(), Some(second_owner.as_str()));
+
+        let cleared = clear_blocker(
+            &repo,
+            Some("Need sign-off"),
+            MutationActor {
+                actor: "agent-3".to_string(),
+                source: ActivitySource::Agent,
+            },
+            SessionContextInput {
+                session_title: Some("Blocker".to_string()),
+                ..SessionContextInput::default()
+            },
+            &index_db,
+        )?;
+        assert_eq!(cleared.plan.phases[0].steps[0].status, StepStatus::InProgress);
+        assert_eq!(cleared.plan.phases[0].steps[1].status, StepStatus::InProgress);
+        assert_eq!(cleared.plan.phases[0].steps[0].owner_session_id.as_deref(), Some(first_owner.as_str()));
+        assert_eq!(cleared.plan.phases[0].steps[1].owner_session_id.as_deref(), Some(second_owner.as_str()));
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_runtime_prefers_focus_then_preserves_last_step_without_owned_sessions() -> Result<()> {
+        let repo = create_real_repo("parallel-project")?;
+        let index_db = Path::new(&repo)
+            .join(".app/index.sqlite")
+            .display()
+            .to_string();
+        init_project(InitProjectInput {
+            root: repo.clone(),
+            actor: "tester".to_string(),
+            source: ActivitySource::Cli,
+            name: Some("Parallel".to_string()),
+            kind: None,
+            owner: None,
+            tags: None,
+            index_db_path: index_db.clone(),
+        })?;
+        let synced = sync_plan(SyncPlanInput {
+            root: repo.clone(),
+            actor: "planner".to_string(),
+            source: ActivitySource::Agent,
+            session_id: None,
+            session_title: Some("Spec sync".to_string()),
+            branch: None,
+            phases: vec![PlanSyncPhaseInput {
+                id: None,
+                title: "Build".to_string(),
+                steps: vec![
+                    PlanSyncStepInput {
+                        id: None,
+                        title: "Capture requirements".to_string(),
+                        summary: Some("Write the initial problem statement.".to_string()),
+                        details: Some(vec!["Capture success criteria.".to_string()]),
+                        depends_on: None,
+                        subtasks: None,
+                    },
+                    PlanSyncStepInput {
+                        id: None,
+                        title: "Draft outline".to_string(),
+                        summary: Some("Draft the outline.".to_string()),
+                        details: Some(vec!["Cover the main sections.".to_string()]),
+                        depends_on: None,
+                        subtasks: None,
+                    },
+                ],
+            }],
+            index_db_path: index_db.clone(),
+        })?;
+        let first_step_id = synced.plan.phases[0].steps[0].id.clone();
+        let second_step_id = synced.plan.phases[0].steps[1].id.clone();
+
+        let started = start_step(
+            &repo,
+            &first_step_id,
+            MutationActor {
+                actor: "agent-1".to_string(),
+                source: ActivitySource::Agent,
+            },
+            SessionContextInput {
+                session_id: Some("agent-1-session".to_string()),
+                session_title: Some("Requirements".to_string()),
+                ..SessionContextInput::default()
+            },
+            &index_db,
+        )?;
+        assert_eq!(started.runtime.current_step_id.as_deref(), Some(first_step_id.as_str()));
+        assert_eq!(started.runtime.focus_session_id.as_deref(), Some("agent-1-session"));
+
+        let switched = add_note(
+            &repo,
+            "focus other session",
+            MutationActor {
+                actor: "agent-2".to_string(),
+                source: ActivitySource::Agent,
+            },
+            SessionContextInput {
+                session_id: Some("agent-2-session".to_string()),
+                session_title: Some("Observer".to_string()),
+                ..SessionContextInput::default()
+            },
+            &index_db,
+        )?;
+        assert_eq!(switched.runtime.focus_session_id.as_deref(), Some("agent-2-session"));
+        assert_eq!(switched.runtime.current_step_id.as_deref(), Some(first_step_id.as_str()));
+
+        let completed = complete_step(
+            &repo,
+            &first_step_id,
+            MutationActor {
+                actor: "agent-1".to_string(),
+                source: ActivitySource::Agent,
+            },
+            SessionContextInput {
+                session_id: Some("agent-1-session".to_string()),
+                session_title: Some("Requirements".to_string()),
+                ..SessionContextInput::default()
+            },
+            &index_db,
+        )?;
+        assert_eq!(completed.runtime.current_step_id.as_deref(), Some(second_step_id.as_str()));
+        assert_eq!(completed.runtime.next_action, "Start \"Draft outline\"");
+
+        let preserved = add_note(
+            &repo,
+            "observer still active",
+            MutationActor {
+                actor: "agent-2".to_string(),
+                source: ActivitySource::Agent,
+            },
+            SessionContextInput {
+                session_id: Some("agent-2-session".to_string()),
+                session_title: Some("Observer".to_string()),
+                ..SessionContextInput::default()
+            },
+            &index_db,
+        )?;
+        assert_eq!(preserved.runtime.current_step_id.as_deref(), Some(second_step_id.as_str()));
+        assert_eq!(preserved.runtime.next_action, "Start \"Draft outline\"");
         Ok(())
     }
 

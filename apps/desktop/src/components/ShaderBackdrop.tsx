@@ -17,20 +17,26 @@ float hash(vec2 p) {
   return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
 }
 
-float currentRibbon(vec2 p, float t, float offset, float slope, float width) {
-  vec2 q = p;
-  q.x += q.y * slope;
-  float wobble = sin(q.y * 7.5 - t * 2.7 + offset * 6.0) * 0.075;
-  wobble += sin(q.y * 17.0 + t * 1.85 + offset * 10.0) * 0.03;
-  float band = abs(q.x + wobble - offset);
+float waveBand(vec2 p, float t, float offset, float amplitude, float frequency, float width) {
+  float wave = sin(p.x * frequency + t * 1.35 + offset * 6.0) * amplitude;
+  wave += sin(p.x * (frequency * 0.58) - t * 0.72 + offset * 9.0) * amplitude * 0.52;
+  wave += cos(p.x * (frequency * 0.25) + t * 0.24) * amplitude * 0.28;
+  float band = abs(p.y + wave - offset);
   return smoothstep(width, 0.0, band);
 }
 
-float bloomField(vec2 p, float t) {
-  float left = currentRibbon(p + vec2(0.0, 0.04 * sin(t * 0.7)), t, -0.32, 0.54, 0.18);
-  float center = currentRibbon(p, t, 0.02, 0.12, 0.24);
-  float right = currentRibbon(p + vec2(0.0, -0.03 * cos(t * 0.85)), t, 0.34, -0.44, 0.16);
-  return left * 0.82 + center * 0.56 + right * 0.74;
+float foamField(vec2 p, float t) {
+  float low = waveBand(p + vec2(0.08 * sin(t * 0.18), 0.0), t, -0.54, 0.13, 2.4, 0.34);
+  float mid = waveBand(p, t, -0.16, 0.09, 4.1, 0.24);
+  float crest = waveBand(p + vec2(0.03 * cos(t * 0.37), 0.0), t, 0.28, 0.05, 6.8, 0.12);
+  return low * 0.38 + mid * 0.72 + crest * 0.96;
+}
+
+float kintsugiSeam(vec2 p, float t, float bend, float offset, float width) {
+  float seam = p.y + p.x * bend;
+  seam += sin(p.x * (5.0 + bend * 4.0) + t * 0.42 + offset * 12.0) * 0.052;
+  seam += sin(p.x * 12.5 - t * 0.21 + offset * 18.0) * 0.018;
+  return smoothstep(width, 0.0, abs(seam - offset));
 }
 
 void main() {
@@ -38,37 +44,44 @@ void main() {
   vec2 p = uv * 2.0 - 1.0;
   p.x *= u_resolution.x / u_resolution.y;
 
-  float t = u_time * 0.11;
+  float t = u_time * 0.095;
 
-  vec3 sumiBase = vec3(0.025, 0.024, 0.03);
-  vec3 emberBase = vec3(0.19, 0.09, 0.055);
-  vec3 amberHorizon = vec3(0.95, 0.54, 0.28);
-  vec3 goldCurrent = vec3(0.98, 0.79, 0.33);
-  vec3 whiteBloom = vec3(0.97, 0.96, 0.92);
-  vec3 charcoalBand = vec3(0.03, 0.025, 0.02);
+  vec3 aiBase = vec3(0.018, 0.03, 0.07);
+  vec3 deepWater = vec3(0.03, 0.14, 0.2);
+  vec3 seijiFoam = vec3(0.54, 0.76, 0.74);
+  vec3 kinGold = vec3(0.89, 0.72, 0.34);
+  vec3 warmShell = vec3(0.97, 0.91, 0.8);
+  vec3 urushiNight = vec3(0.014, 0.015, 0.03);
 
-  float horizonLift = smoothstep(-1.0, 0.25, p.y);
-  vec3 base = mix(sumiBase, emberBase, horizonLift * 0.58);
-  float horizonCore = exp(-pow((p.y + 0.2 + 0.025 * sin(t * 0.45 + p.x * 1.35)) * 4.4, 2.0));
-  base += amberHorizon * horizonCore * 0.86;
-  base = mix(base, charcoalBand, smoothstep(-0.1, 0.12, p.y) * 0.22);
+  float depthLift = smoothstep(-1.0, 0.85, p.y);
+  vec3 base = mix(aiBase, deepWater, depthLift * 0.82);
 
-  float leftCurrent = currentRibbon(p, t, -0.28, 0.56, 0.1);
-  float centerCurrent = currentRibbon(p, t, 0.04, 0.18, 0.13);
-  float rightCurrent = currentRibbon(p, t, 0.31, -0.46, 0.09);
-  float plasma = bloomField(p, t);
+  float foam = foamField(p, t);
+  float trailingWave = waveBand(p + vec2(0.0, 0.04 * sin(t * 0.3)), t, 0.46, 0.035, 8.4, 0.085);
+  float tideShadow = waveBand(p, t, -0.7, 0.14, 2.1, 0.5);
 
-  float amberBleed = exp(-pow((p.y + 0.24) * 7.0, 2.0)) * (0.55 + 0.45 * sin(p.x * 2.0 + t * 0.8));
-  float scanline = 0.975 + 0.025 * sin(uv.y * u_resolution.y * 0.72 + p.x * 10.0);
-  float grain = (hash(gl_FragCoord.xy * 0.65 + t * 19.0) - 0.5) * 0.03;
+  float mistLine = exp(-pow((p.y + 0.58 + 0.05 * sin(t * 0.26 + p.x * 1.8)) * 3.2, 2.0));
+  float trench = 1.0 - smoothstep(-0.95, -0.12, p.y);
+  float vignette = 1.0 - dot(uv - 0.5, uv - 0.5) * 0.92;
+  float grain = (hash(gl_FragCoord.xy * 0.48 + t * 23.0) - 0.5) * 0.028;
 
-  vec3 bloom = goldCurrent * (leftCurrent * 0.9 + centerCurrent * 0.52 + plasma * 0.16);
-  bloom += whiteBloom * (rightCurrent * 0.76 + plasma * 0.24);
-  bloom += amberHorizon * amberBleed * 0.22;
+  base += seijiFoam * mistLine * 0.18;
+  base = mix(base, urushiNight, tideShadow * 0.2 + trench * 0.24);
 
-  vec3 result = base + bloom * (0.5 + horizonCore * 0.35);
-  result += whiteBloom * pow(plasma, 1.9) * 0.16;
-  result *= scanline;
+  float seamPrimary = kintsugiSeam(p, t, 0.18, -0.12, 0.024);
+  float seamBranch = kintsugiSeam(p + vec2(0.14, -0.08), t, -0.22, 0.18, 0.014);
+  float seamAccent = kintsugiSeam(p + vec2(-0.12, 0.18), t, 0.08, 0.46, 0.016);
+  float seam = seamPrimary * 0.88 + seamBranch * 0.54 + seamAccent * 0.36;
+  float seamPulse = 0.72 + 0.28 * sin(p.x * 5.0 - t * 1.4);
+
+  vec3 foamGlow = seijiFoam * (foam * 0.34 + trailingWave * 0.22);
+  foamGlow += warmShell * pow(trailingWave, 2.0) * 0.08;
+
+  vec3 seamGlow = kinGold * seam * (0.82 + seamPulse * 0.34);
+  seamGlow += warmShell * pow(seam, 2.3) * 0.24;
+
+  vec3 result = base + foamGlow + seamGlow;
+  result *= 0.94 + vignette * 0.2;
   result += grain;
 
   gl_FragColor = vec4(result, 1.0);

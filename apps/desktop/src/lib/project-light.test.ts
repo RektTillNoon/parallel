@@ -91,6 +91,30 @@ describe('deriveProjectLightState', () => {
     );
   });
 
+  it('returns live when another active session owns a different step', () => {
+    expect(
+      deriveProjectLightState(
+        buildProject({ status: 'in_progress', currentStepId: 'capture-requirements' }),
+        buildBoardProject({
+          sessions: [
+            {
+              ...buildBoardProject().sessions[0],
+              id: 'session-2',
+              owned_step_id: 'draft-outline',
+            },
+          ],
+          activeStepLookup: {
+            ...buildBoardProject().activeStepLookup,
+            'draft-outline': {
+              title: 'Draft outline',
+              summary: 'Draft the outline.',
+            },
+          },
+        }),
+      ),
+    ).toBe('live');
+  });
+
   it('returns blocked when blockers exist', () => {
     expect(
       deriveProjectLightState(

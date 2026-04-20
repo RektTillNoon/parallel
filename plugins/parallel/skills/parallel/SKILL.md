@@ -56,6 +56,8 @@ For each initialized repo, `parallel` maintains:
 - pending decision proposals
 - a generated handoff snapshot
 
+`current_step_id` is the focused project view, not proof that only one step is active. Multiple active sessions can own different steps in the same project, while runtime focus and next action describe the primary step the product should foreground.
+
 ## Surface Map
 
 Use either adapter depending on context:
@@ -255,8 +257,8 @@ Avoid logging:
 
 Good `parallel` usage leaves three things true:
 
-1. The current step and next action are accurate.
-2. Session ownership is visible for active work.
+1. The focused current step and next action are accurate.
+2. Session ownership is visible for active work, even when more than one session owns a different step in the same project.
 3. A later agent can read `get_project` or the handoff and understand what happened without guessing.
 
 An effective agent uses `parallel` at the boundaries of execution:

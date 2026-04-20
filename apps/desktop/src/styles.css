@@ -26,15 +26,15 @@
     ui-monospace,
     monospace;
   font-family: var(--font-sans);
-  --bg: oklch(0.17 0.014 270);
-  --surface: oklch(0.22 0.016 270);
-  --ink: oklch(0.94 0.01 270);
-  --muted: oklch(0.75 0.02 270);
-  --subtle: oklch(0.59 0.018 270);
-  --line: oklch(0.31 0.014 270);
-  --line-strong: oklch(0.42 0.018 270);
-  --accent: oklch(0.74 0.17 42);
-  --accent-ink: oklch(0.81 0.13 42);
+  --bg: oklch(0.17 0.014 250);
+  --surface: oklch(0.22 0.016 248);
+  --ink: oklch(0.94 0.01 250);
+  --muted: oklch(0.75 0.02 248);
+  --subtle: oklch(0.59 0.018 246);
+  --line: oklch(0.31 0.014 248);
+  --line-strong: oklch(0.42 0.018 246);
+  --accent: oklch(0.74 0.17 85);
+  --accent-ink: oklch(0.81 0.13 85);
   --accent-soft: color-mix(in oklab, var(--accent) 16%, black);
   --accent-halo: color-mix(in oklab, var(--accent) 22%, transparent);
   --good: oklch(0.7 0.16 150);
@@ -72,18 +72,18 @@ body {
   height: 100%;
   z-index: 0;
   pointer-events: none;
-  opacity: 0.64;
+  opacity: 0.58;
   mix-blend-mode: screen;
   -webkit-mask-image: radial-gradient(
-    ellipse 88% 76% at 58% 45%,
+    ellipse 92% 82% at 54% 42%,
     rgba(0, 0, 0, 0.96) 0%,
-    rgba(0, 0, 0, 0.78) 44%,
+    rgba(0, 0, 0, 0.8) 46%,
     rgba(0, 0, 0, 0.3) 100%
   );
   mask-image: radial-gradient(
-    ellipse 88% 76% at 58% 45%,
+    ellipse 92% 82% at 54% 42%,
     rgba(0, 0, 0, 0.96) 0%,
-    rgba(0, 0, 0, 0.78) 44%,
+    rgba(0, 0, 0, 0.8) 46%,
     rgba(0, 0, 0, 0.3) 100%
   );
 }

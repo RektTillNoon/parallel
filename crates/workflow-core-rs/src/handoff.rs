@@ -33,7 +33,7 @@ pub fn generate_handoff(input: &HandoffInput) -> String {
             .to_lowercase()
             .replace("stepstatus::", "- Status: "),
         format!(
-            "- Current step: {}",
+            "- Focused step: {}",
             current_step.unwrap_or_else(|| "None".to_string())
         ),
         format!(
@@ -74,6 +74,10 @@ pub fn generate_handoff(input: &HandoffInput) -> String {
                 .replace("ActivitySource::", ""),
             );
         }
+        lines.push(
+            "- Focused step is the primary runtime view; other active session owners may still be listed here."
+                .to_string(),
+        );
     }
 
     lines.push(String::new());

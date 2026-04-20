@@ -37,13 +37,10 @@ export function deriveProjectLightState(
     return 'done';
   }
 
-  const currentStepId = project.currentStepId;
-  const ownsCurrentStep = Boolean(
-    currentStepId &&
-      boardProject?.sessions.some(
-        (session) => session.status === 'active' && session.owned_step_id === currentStepId,
-      ),
-  );
+  const hasOwnedStep =
+    boardProject?.sessions.some(
+      (session) => session.status === 'active' && session.owned_step_id !== null,
+    ) ?? false;
 
-  return ownsCurrentStep ? 'live' : 'resumable';
+  return hasOwnedStep ? 'live' : 'resumable';
 }

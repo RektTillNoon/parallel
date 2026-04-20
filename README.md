@@ -8,6 +8,8 @@
 
 For each initialized repo, `parallel` tracks a canonical plan, runtime focus, sessions, activity, blockers, decision proposals, and a generated handoff.
 
+`current_step_id` is the focused project view, not proof that only one step is active. Multiple active sessions in the same project can own different steps concurrently, while `runtime focus` and `next action` describe the primary step the UI should foreground.
+
 ## Repo layout
 
 - `apps/desktop`
@@ -71,5 +73,7 @@ Typical agent or operator flow:
 4. start the current step
 5. log activity, notes, blockers, or decisions as work progresses
 6. complete the step and refresh handoff when stopping
+
+`Live work` means at least one active session owns a step. The focused current step is the primary view for the project, but it is not an exclusivity lock.
 
 The detailed operator guidance lives in [plugins/parallel/skills/parallel/SKILL.md](plugins/parallel/skills/parallel/SKILL.md).

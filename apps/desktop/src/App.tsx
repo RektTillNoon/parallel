@@ -94,12 +94,18 @@ export function choosePrimaryBoardRow(
   board: SessionBoardData,
   selectedRoot: string | null,
   selectedSessionId: string | null,
+  focusSessionId: string | null,
 ): SessionBoardRow | null {
   if (selectedRoot) {
     return (
       board.rows.find(
         (row) => row.projectRoot === selectedRoot && row.sessionId === selectedSessionId,
-      ) ?? board.rows.find((row) => row.projectRoot === selectedRoot) ?? null
+      ) ??
+      board.rows.find(
+        (row) => row.projectRoot === selectedRoot && row.sessionId === focusSessionId,
+      ) ??
+      board.rows.find((row) => row.projectRoot === selectedRoot) ??
+      null
     );
   }
 
@@ -448,8 +454,13 @@ export default function App() {
   }, [state]);
 
   const selectedBoardRow = useMemo(() => {
-    return choosePrimaryBoardRow(board, selectedRoot, selectedSessionId);
-  }, [board, selectedRoot, selectedSessionId]);
+    return choosePrimaryBoardRow(
+      board,
+      selectedRoot,
+      selectedSessionId,
+      selectedSummary?.focusSessionId ?? null,
+    );
+  }, [board, selectedRoot, selectedSessionId, selectedSummary?.focusSessionId]);
 
   useEffect(() => {
     setSelectedSessionId(resolveSelectedSessionId(selectedBoardRow));

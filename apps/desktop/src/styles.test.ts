@@ -19,14 +19,14 @@ describe('single-focus design system', () => {
     expect(styles).not.toMatch(/@import\s+url\((["'])https?:\/\//i);
   });
 
-  it('defines the vibrant-minimal token palette with a vivid accent', () => {
+  it('defines an indigo sea palette with a kintsugi gold accent', () => {
     expect(styles).toMatch(/color-scheme:\s*dark;/);
-    expect(styles).toMatch(/--bg:\s*oklch\(/);
-    expect(styles).toMatch(/--surface:\s*oklch\(/);
+    expect(styles).toMatch(/--bg:\s*oklch\([^)]+250\)/);
+    expect(styles).toMatch(/--surface:\s*oklch\([^)]+248\)/);
     expect(styles).toMatch(/--ink:\s*oklch\(/);
     expect(styles).toMatch(/--muted:\s*oklch\(/);
     expect(styles).toMatch(/--line:\s*oklch\(/);
-    expect(styles).toMatch(/--accent:\s*oklch\([^)]+42\)/);
+    expect(styles).toMatch(/--accent:\s*oklch\([^)]+85\)/);
     expect(styles).toMatch(/--accent-soft:\s*color-mix/);
   });
 
@@ -72,6 +72,9 @@ describe('single-focus design system', () => {
   it('mounts the shader backdrop behind the shell', () => {
     expect(styles).toMatch(/\.shader-backdrop\s*{[\s\S]*position:\s*fixed;/s);
     expect(styles).toMatch(/\.shader-backdrop\s*{[\s\S]*pointer-events:\s*none;/s);
+    expect(styles).toMatch(/\.shader-backdrop\s*{[\s\S]*opacity:\s*0\.58;/s);
+    expect(styles).toMatch(/\.shader-backdrop\s*{[\s\S]*mix-blend-mode:\s*screen;/s);
+    expect(styles).toMatch(/\.shader-backdrop\s*{[\s\S]*ellipse 92% 82% at 54% 42%/s);
     expect(styles).toMatch(
       /\.shell\s*>\s*\*:not\(:is\(\.shader-backdrop,\s*\.settings-modal-layer\)\)/s,
     );
