@@ -25,6 +25,27 @@ use crate::storage_yaml::{
     write_text_atomic, write_yaml_atomic,
 };
 
+const MAX_ACTIVITY_SUMMARY_CHARS: usize = 140;
+
+fn normalize_activity_summary(summary: &str) -> Result<String> {
+    let trimmed = summary.trim();
+    if trimmed.is_empty() {
+        bail!("Summary cannot be empty");
+    }
+    if trimmed.contains('\n') || trimmed.contains('\r') {
+        bail!("Summary must be a single line");
+    }
+    if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
+        bail!("Summary must be a sentence, not a list item");
+    }
+    if trimmed.chars().count() > MAX_ACTIVITY_SUMMARY_CHARS {
+        bail!(
+            "Summary must be at most {MAX_ACTIVITY_SUMMARY_CHARS} characters"
+        );
+    }
+    Ok(trimmed.to_string())
+}
+
 fn create_default_plan() -> Plan {
     Plan {
         version: 2,
@@ -1654,6 +1675,7 @@ pub fn update_runtime(input: RuntimePatchInput) -> Result<ProjectDetail> {
 }
 
 pub fn append_activity_event(root: &str, event: AppendActivityInput) -> Result<ProjectDetail> {
+    let summary = normalize_activity_summary(&event.summary)?;
     let actor = MutationActor {
         actor: event.actor.clone(),
         source: event.source,
@@ -1711,7 +1733,7 @@ pub fn append_activity_event(root: &str, event: AppendActivityInput) -> Result<P
         );
 
         Ok(MutateProjectResult {
-            summary: event.summary.clone(),
+            summary: summary.clone(),
             event_type: event.event_type.clone(),
             payload: event.payload.clone().unwrap_or_else(|| json!({})),
             write_plan: Some(data.plan),
@@ -2327,6 +2349,119 @@ mod tests {
         let first_step = &refreshed.plan.phases[0].steps[0];
         assert_eq!(first_step.owner_session_id, None);
         assert_eq!(first_step.status, StepStatus::Todo);
+        Ok(())
+    }
+
+    #[test]
+    fn append_activity_trims_summary_before_persisting() -> Result<()> {
+        let repo = create_real_repo("parallel-project")?;
+        let index_db = Path::new(&repo)
+            .join(".app/index.sqlite")
+            .display()
+            .to_string();
+        init_project(InitProjectInput {
+            root: repo.clone(),
+            actor: "tester".to_string(),
+            source: ActivitySource::Cli,
+            name: Some("Parallel".to_string()),
+            kind: None,
+            owner: None,
+            tags: None,
+            index_db_path: index_db.clone(),
+        })?;
+
+        let detail = add_note(
+            &repo,
+            "  trimmed note  ",
+            MutationActor {
+                actor: "agent-1".to_string(),
+                source: ActivitySource::Agent,
+            },
+            SessionContextInput {
+                session_title: Some("Requirements".to_string()),
+                ..SessionContextInput::default()
+            },
+            &index_db,
+        )?;
+
+        assert!(detail
+            .recent_activity
+            .iter()
+            .any(|event| event.summary == "trimmed note"));
+        Ok(())
+    }
+
+    #[test]
+    fn append_activity_rejects_multiline_summary() -> Result<()> {
+        let repo = create_real_repo("parallel-project")?;
+        let index_db = Path::new(&repo)
+            .join(".app/index.sqlite")
+            .display()
+            .to_string();
+        init_project(InitProjectInput {
+            root: repo.clone(),
+            actor: "tester".to_string(),
+            source: ActivitySource::Cli,
+            name: Some("Parallel".to_string()),
+            kind: None,
+            owner: None,
+            tags: None,
+            index_db_path: index_db.clone(),
+        })?;
+
+        let error = add_note(
+            &repo,
+            "first line\nsecond line",
+            MutationActor {
+                actor: "agent-1".to_string(),
+                source: ActivitySource::Agent,
+            },
+            SessionContextInput {
+                session_title: Some("Requirements".to_string()),
+                ..SessionContextInput::default()
+            },
+            &index_db,
+        )
+        .expect_err("multiline summaries should be rejected");
+
+        assert!(error.to_string().contains("single line"));
+        Ok(())
+    }
+
+    #[test]
+    fn append_activity_rejects_overlong_summary() -> Result<()> {
+        let repo = create_real_repo("parallel-project")?;
+        let index_db = Path::new(&repo)
+            .join(".app/index.sqlite")
+            .display()
+            .to_string();
+        init_project(InitProjectInput {
+            root: repo.clone(),
+            actor: "tester".to_string(),
+            source: ActivitySource::Cli,
+            name: Some("Parallel".to_string()),
+            kind: None,
+            owner: None,
+            tags: None,
+            index_db_path: index_db.clone(),
+        })?;
+
+        let error = add_note(
+            &repo,
+            &"x".repeat(MAX_ACTIVITY_SUMMARY_CHARS + 1),
+            MutationActor {
+                actor: "agent-1".to_string(),
+                source: ActivitySource::Agent,
+            },
+            SessionContextInput {
+                session_title: Some("Requirements".to_string()),
+                ..SessionContextInput::default()
+            },
+            &index_db,
+        )
+        .expect_err("overlong summaries should be rejected");
+
+        assert!(error.to_string().contains("at most"));
         Ok(())
     }
 

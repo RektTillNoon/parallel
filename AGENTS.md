@@ -10,7 +10,7 @@ This repo builds the `parallel` product itself:
 - shared workflow engine in `crates/workflow-core-rs`
 - CLI and MCP bridge in `crates/projectctl-rs`
 
-Do not confuse product usage with repo implementation. If the task is to use `parallel` against another repo, prefer the product workflow in `plugins/parallel/skills/parallel/SKILL.md`. If the task is to change `parallel`, work in this codebase directly.
+Do not confuse product usage with repo implementation. If the task is to use `parallel` against another repo, prefer the product workflow in `skills/parallel/SKILL.md`. If the task is to change `parallel`, work in this codebase directly.
 
 ## Required workflow
 

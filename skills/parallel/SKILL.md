@@ -191,6 +191,7 @@ In normal product usage, the desktop app manages bridge startup and setup snippe
 - Use `start_step` only when the step is now your active execution focus. Do not claim a step just because you inspected it.
 - If you are exploring or debugging without clear ownership yet, ensure the session and append activity first. Claim the step when execution truly starts.
 - Activity entries should capture meaningful state transitions, evidence, or results. Good examples: test results, reproduction confirmed, migration synced, blocker cleared, handoff updated.
+- Activity and note summaries must be one line, sentence-style, and 140 characters or fewer.
 - Notes should be sparse and high signal. Prefer one clear note over a stream of tiny narration.
 - If runtime, plan, or step ownership appears inconsistent, read state again before trying to patch around it.
 
@@ -263,6 +264,7 @@ Good `parallel` usage leaves three things true:
 
 An effective agent uses `parallel` at the boundaries of execution:
 
-- before substantial work, to orient
-- during meaningful progress, to keep state truthful
+- before substantial implementation begins
+- when a step is claimed or completed
+- when blockers or decisions arise
 - before handoff or exit, to leave the next agent a usable starting point

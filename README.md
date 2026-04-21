@@ -18,7 +18,7 @@ For each initialized repo, `parallel` tracks a canonical plan, runtime focus, se
   Shared Rust workflow engine, file/index storage, discovery, and read-model logic.
 - `crates/projectctl-rs`
   `projectctl` CLI plus the local MCP HTTP/stdio bridge implementation.
-- `plugins/parallel/skills/parallel`
+- `skills/parallel`
   Product-usage guidance for agents using `parallel` through MCP or `projectctl`.
 - `docs/`
   Design notes and implementation plans for active product work.
@@ -76,4 +76,4 @@ Typical agent or operator flow:
 
 `Live work` means at least one active session owns a step. The focused current step is the primary view for the project, but it is not an exclusivity lock.
 
-The detailed operator guidance lives in [plugins/parallel/skills/parallel/SKILL.md](plugins/parallel/skills/parallel/SKILL.md).
+The detailed operator guidance lives in [skills/parallel/SKILL.md](skills/parallel/SKILL.md).

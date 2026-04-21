@@ -896,7 +896,7 @@ fn tool_definitions() -> Vec<ToolDescriptor> {
         ToolDescriptor {
             name: "append_activity",
             title: "Append activity",
-            description: "Append a structured activity event, optionally linked to a session, step, or subtask.",
+            description: "Append a structured one-line activity event, optionally linked to a session, step, or subtask.",
             input_schema: schema_for_value::<AppendActivityArgs>(),
         },
         ToolDescriptor {
