@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0 --port 1420",
     "build": "vite build",
     "test": "vitest run",
-    "tauri": "tauri"
+    "tauri": "CARGO_TARGET_DIR=../../target tauri"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",

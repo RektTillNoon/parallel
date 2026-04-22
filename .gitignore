@@ -3,7 +3,6 @@ dist
 .DS_Store
 coverage
 target
-src-tauri/target
 *.tsbuildinfo
 
 # Ignore repo-local hidden workdirs by default, but keep committed contract dirs.
