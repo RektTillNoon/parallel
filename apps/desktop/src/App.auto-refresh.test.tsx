@@ -464,7 +464,7 @@ describe('App auto refresh', () => {
     });
     await flush();
 
-    expect(container.textContent).toContain('Managed defaults keep this agent aligned');
+    expect(container.textContent).toContain('No Parallel entry is configured for this agent.');
     expect(container.textContent).toContain('doctor probe failed');
   });
 

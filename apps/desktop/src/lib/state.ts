@@ -170,8 +170,8 @@ export function describeAgentDefaultsStatus(status: AgentTargetStatus): AgentDef
     default:
       return {
         tone: 'caution',
-        label: 'Not installed',
-        detail,
+        label: 'Parallel not configured',
+        detail: detail ?? 'No Parallel entry is configured for this agent.',
         canInstall: true,
         canUpdate: false,
         canReinstall: true,
@@ -191,6 +191,12 @@ function describeAgentDefaultsReasons(reasons: string[]) {
   }
   if (reasons.includes('parallel_name_collision')) {
     return 'A differently named server already points at this Parallel endpoint or command.';
+  }
+  if (reasons.includes('bridge_endpoint_outdated')) {
+    return 'This agent points at an older Parallel bridge endpoint.';
+  }
+  if (reasons.includes('bridge_token_outdated')) {
+    return 'This agent has an older Parallel bridge token.';
   }
   if (reasons.includes('shape_mismatch')) {
     return 'A Parallel entry already exists but does not match the canonical managed shape.';

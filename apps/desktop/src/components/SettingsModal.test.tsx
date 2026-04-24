@@ -102,7 +102,7 @@ describe('SettingsModal', () => {
     expect(html).toContain('PARALLEL_MCP_TOKEN');
     expect(html).toContain('Copy token export');
     expect(html).toContain('Codex');
-    expect(html).toContain('Not installed');
+    expect(html).toContain('Parallel not configured');
     expect(html).toContain('settings-scroll');
     expect(html).toContain('settings-toggle-control');
     expect(html).toContain('settings-action-details');

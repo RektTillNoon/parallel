@@ -467,6 +467,9 @@ fn inspect_codex_config(path: &Path, expected_url: &str) -> Result<SurfaceStatus
     if url == Some(expected_url) && env_var == Some(CODEX_TOKEN_ENV_VAR) {
         return Ok(installed());
     }
+    if env_var == Some(CODEX_TOKEN_ENV_VAR) && url.is_some() && url != Some(expected_url) {
+        return Ok(stale("bridge_endpoint_outdated"));
+    }
     Ok(stale("shape_mismatch"))
 }
 
@@ -524,11 +527,12 @@ fn inspect_claude_code_config(
         .and_then(Value::as_object)
         .and_then(|servers| servers.get(PARALLEL_SERVER_NAME))
     {
-        return if matches_claude_code_entry(user_entry, expected_url, expected_token) {
-            Ok(installed())
-        } else {
-            Ok(stale("shape_mismatch"))
-        };
+        return Ok(classify_claude_code_entry(
+            user_entry,
+            expected_url,
+            expected_token,
+            installed(),
+        ));
     }
 
     if let Some(repo_root) = repo_root {
@@ -537,11 +541,12 @@ fn inspect_claude_code_config(
             .and_then(Value::as_object)
             .and_then(|servers| servers.get(PARALLEL_SERVER_NAME))
         {
-            return if matches_claude_code_entry(local_entry, expected_url, expected_token) {
-                Ok(stale("legacy_local_scope"))
-            } else {
-                Ok(stale("shape_mismatch"))
-            };
+            return Ok(classify_claude_code_entry(
+                local_entry,
+                expected_url,
+                expected_token,
+                stale("legacy_local_scope"),
+            ));
         }
     }
 
@@ -688,24 +693,42 @@ fn has_matching_named_collision(
     })
 }
 
-fn matches_claude_code_entry(entry: &Value, expected_url: &str, expected_token: &str) -> bool {
-    entry
+fn classify_claude_code_entry(
+    entry: &Value,
+    expected_url: &str,
+    expected_token: &str,
+    match_status: SurfaceStatus,
+) -> SurfaceStatus {
+    let is_http = entry
         .get("type")
         .and_then(Value::as_str)
         .map(|kind| kind == "http")
-        .unwrap_or(false)
-        && entry
-            .get("url")
-            .and_then(Value::as_str)
-            .map(|url| url == expected_url)
-            .unwrap_or(false)
-        && entry
-            .get("headers")
-            .and_then(Value::as_object)
-            .and_then(|headers| headers.get("Authorization"))
-            .and_then(Value::as_str)
-            .map(|header| header == format!("Bearer {expected_token}"))
-            .unwrap_or(false)
+        .unwrap_or(false);
+    if !is_http {
+        return stale("shape_mismatch");
+    }
+
+    let url_matches = entry
+        .get("url")
+        .and_then(Value::as_str)
+        .map(|url| url == expected_url)
+        .unwrap_or(false);
+    if !url_matches {
+        return stale("bridge_endpoint_outdated");
+    }
+
+    let token_matches = entry
+        .get("headers")
+        .and_then(Value::as_object)
+        .and_then(|headers| headers.get("Authorization"))
+        .and_then(Value::as_str)
+        .map(|header| header == format!("Bearer {expected_token}"))
+        .unwrap_or(false);
+    if !token_matches {
+        return stale("bridge_token_outdated");
+    }
+
+    match_status
 }
 
 fn canonical_claude_code_entry(expected_url: &str, expected_token: &str) -> Value {
@@ -1271,6 +1294,35 @@ mod tests {
     }
 
     #[test]
+    fn codex_endpoint_mismatch_reports_outdated_endpoint() {
+        let base = unique_temp_dir("codex-endpoint");
+        let home = base.join("home");
+        fs::create_dir_all(home.join(".codex")).expect("codex dir should create");
+        fs::write(
+            home.join(".codex/config.toml"),
+            "[mcp_servers.parallel]\nurl = \"http://127.0.0.1:4901/mcp\"\nbearer_token_env_var = \"PARALLEL_MCP_TOKEN\"\n",
+        )
+        .expect("config should write");
+        fs::write(home.join(".codex/AGENTS.md"), managed_block(global_text_body()))
+            .expect("codex instructions should write");
+
+        let status = inspect_agent_defaults(
+            &AgentDefaultsContext {
+                home_dir: Some(home),
+                bridge_url: Some("http://127.0.0.1:4910/mcp".to_string()),
+                bridge_token: Some("token".to_string()),
+                ..AgentDefaultsContext::default()
+            },
+            ClientKind::Codex,
+            InstallScope::Global,
+        )
+        .expect("status should inspect");
+
+        assert_eq!(status.status, InstallStatus::Stale);
+        assert_eq!(status.reasons, vec!["bridge_endpoint_outdated".to_string()]);
+    }
+
+    #[test]
     fn claude_code_user_scope_entry_is_recognized_as_installed() {
         let base = unique_temp_dir("claude-user");
         let home = base.join("home");
@@ -1307,6 +1359,46 @@ mod tests {
         .expect("status should inspect");
 
         assert_eq!(status.status, InstallStatus::Installed);
+    }
+
+    #[test]
+    fn claude_code_token_mismatch_reports_outdated_token() {
+        let base = unique_temp_dir("claude-token");
+        let home = base.join("home");
+        fs::create_dir_all(home.join(".claude")).expect("claude dir should create");
+        fs::write(
+            home.join(".claude.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "mcpServers": {
+                    "parallel": {
+                        "type": "http",
+                        "url": "http://127.0.0.1:4855/mcp",
+                        "headers": {
+                            "Authorization": "Bearer old-token"
+                        }
+                    }
+                }
+            }))
+            .expect("json should serialize"),
+        )
+        .expect("claude config should write");
+        fs::write(home.join(".claude/CLAUDE.md"), managed_block(global_text_body()))
+            .expect("claude instructions should write");
+
+        let status = inspect_agent_defaults(
+            &AgentDefaultsContext {
+                home_dir: Some(home),
+                bridge_url: Some("http://127.0.0.1:4855/mcp".to_string()),
+                bridge_token: Some("new-token".to_string()),
+                ..AgentDefaultsContext::default()
+            },
+            ClientKind::ClaudeCode,
+            InstallScope::Global,
+        )
+        .expect("status should inspect");
+
+        assert_eq!(status.status, InstallStatus::Stale);
+        assert_eq!(status.reasons, vec!["bridge_token_outdated".to_string()]);
     }
 
     #[test]

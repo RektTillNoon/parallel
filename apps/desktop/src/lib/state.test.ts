@@ -272,6 +272,48 @@ describe('agent defaults status helpers', () => {
     });
   });
 
+  it('describes stale endpoint tracking without blaming config shape', () => {
+    expect(
+      describeAgentDefaultsStatus({
+        kind: 'codex',
+        label: 'Codex',
+        status: 'stale',
+        reasons: ['bridge_endpoint_outdated'],
+        global: null,
+        repo: null,
+        changedPaths: [],
+      }),
+    ).toEqual({
+      tone: 'caution',
+      label: 'Update needed',
+      detail: 'This agent points at an older Parallel bridge endpoint.',
+      canInstall: false,
+      canUpdate: true,
+      canReinstall: true,
+    });
+  });
+
+  it('describes missing agent defaults as an unconfigured Parallel entry', () => {
+    expect(
+      describeAgentDefaultsStatus({
+        kind: 'claudeDesktop',
+        label: 'Claude Desktop',
+        status: 'missing',
+        reasons: [],
+        global: null,
+        repo: null,
+        changedPaths: [],
+      }),
+    ).toEqual({
+      tone: 'caution',
+      label: 'Parallel not configured',
+      detail: 'No Parallel entry is configured for this agent.',
+      canInstall: true,
+      canUpdate: false,
+      canReinstall: true,
+    });
+  });
+
   it('treats installed repo-managed guidance as healthy', () => {
     expect(
       describeAgentDefaultsStatus({
