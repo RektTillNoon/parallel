@@ -144,6 +144,8 @@ const DESKTOP_ACTOR_ID: &str = "desktop-user";
 const DEFAULT_PROJECT_KIND: &str = "software";
 const DASHBOARD_WINDOW_LABEL: &str = "main";
 const MENU_BAR_WINDOW_LABEL: &str = "menubar";
+const MENU_BAR_TRAY_TITLE: &str = "parallel";
+const MENU_BAR_TRAY_SHOW_MENU_ON_LEFT_CLICK: bool = true;
 const WORKFLOW_TOPOLOGY_EVENT: &str = "workflow://topology-changed";
 const WORKFLOW_SNAPSHOT_EVENT: &str = "workflow://snapshot-changed";
 const LOCAL_WRITE_SUPPRESSION_WINDOW_MS: u64 = 1500;
@@ -570,22 +572,36 @@ fn handle_terminated_bridge_process(supervisor: &mut BridgeSupervisor, monitored
     intentional_stop
 }
 
-fn stop_bridge(app: &AppHandle, state: &AppState, reason: &str) -> Result<(), String> {
-    {
-        let mut guard = state
-            .bridge
-            .lock()
-            .map_err(|_| "bridge mutex poisoned".to_string())?;
-        if let Some(child) = guard.child.take() {
-            guard.stopping_pid = guard.child_pid.take();
-            let _ = child.kill();
-        }
-        guard.runtime.status = "stopped".to_string();
-        guard.runtime.pid = None;
-        guard.runtime.bound_port = None;
-        guard.runtime.started_at = None;
-        guard.runtime.last_error = None;
+fn clear_stopped_bridge_runtime(supervisor: &mut BridgeSupervisor) {
+    supervisor.runtime.status = "stopped".to_string();
+    supervisor.runtime.pid = None;
+    supervisor.runtime.bound_port = None;
+    supervisor.runtime.started_at = None;
+    supervisor.runtime.last_error = None;
+}
+
+fn stop_bridge_child(supervisor: &mut BridgeSupervisor) {
+    if let Some(child) = supervisor.child.take() {
+        supervisor.stopping_pid = supervisor.child_pid.take();
+        let _ = child.kill();
+    } else {
+        supervisor.child_pid = None;
+        supervisor.stopping_pid = None;
     }
+    clear_stopped_bridge_runtime(supervisor);
+}
+
+fn stop_bridge_without_emit(state: &AppState) -> Result<(), String> {
+    let mut guard = state
+        .bridge
+        .lock()
+        .map_err(|_| "bridge mutex poisoned".to_string())?;
+    stop_bridge_child(&mut guard);
+    Ok(())
+}
+
+fn stop_bridge(app: &AppHandle, state: &AppState, reason: &str) -> Result<(), String> {
+    stop_bridge_without_emit(state)?;
     emit_bridge_state(app, state, reason)
 }
 
@@ -1195,7 +1211,7 @@ fn sync_tray(app: &AppHandle, state: &AppState, payload: &LoadStatePayload) -> R
     if let Some(tray) = app.tray_by_id("workflow-tray") {
         tray.set_menu(Some(build_tray_menu(app, &snapshot)?))
             .map_err(|error| error.to_string())?;
-        tray.set_title(None::<&str>)
+        tray.set_title(Some(MENU_BAR_TRAY_TITLE))
             .map_err(|error| error.to_string())?;
         tray.set_tooltip(Some(snapshot.tooltip))
             .map_err(|error| error.to_string())?;
@@ -2097,7 +2113,8 @@ fn hide_menu_bar_popover_cmd(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn quit_app_cmd(app: AppHandle) -> Result<(), String> {
+fn quit_app_cmd(app: AppHandle, state: State<AppState>) -> Result<(), String> {
+    let _ = stop_bridge_without_emit(&state);
     app.exit(0);
     Ok(())
 }
@@ -2113,9 +2130,9 @@ fn build_tray(app: &AppHandle, state: &AppState) -> Result<(), String> {
                 .cloned()
                 .ok_or_else(|| "default window icon missing".to_string())?,
         )
-        .icon_as_template(true)
+        .title(MENU_BAR_TRAY_TITLE)
         .tooltip(&snapshot.tooltip)
-        .show_menu_on_left_click(false)
+        .show_menu_on_left_click(MENU_BAR_TRAY_SHOW_MENU_ON_LEFT_CLICK)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open" => {
                 let _ = open_main_window(app);
@@ -2249,6 +2266,10 @@ fn main() {
             ..
         } if should_hide_menu_bar_popover_on_blur(&label, focused) => {
             let _ = hide_menu_bar_popover(app);
+        }
+        RunEvent::Exit => {
+            let state_ref = app.state::<AppState>();
+            let _ = stop_bridge_without_emit(&state_ref);
         }
         _ => {}
     });
@@ -2399,6 +2420,32 @@ mod tests {
         assert!(intentional);
         assert_eq!(supervisor.child_pid, Some(222));
         assert_eq!(supervisor.stopping_pid, None);
+    }
+
+    #[test]
+    fn stop_bridge_child_clears_runtime_even_without_owned_child_handle() {
+        let mut supervisor = BridgeSupervisor {
+            child: None,
+            child_pid: Some(222),
+            stopping_pid: Some(111),
+            runtime: BridgeRuntimeSnapshot {
+                status: "running".to_string(),
+                bound_port: Some(4855),
+                pid: Some(222),
+                started_at: Some("2026-04-24T12:00:00Z".to_string()),
+                last_error: Some("stale".to_string()),
+            },
+        };
+
+        stop_bridge_child(&mut supervisor);
+
+        assert_eq!(supervisor.child_pid, None);
+        assert_eq!(supervisor.stopping_pid, None);
+        assert_eq!(supervisor.runtime.status, "stopped");
+        assert_eq!(supervisor.runtime.pid, None);
+        assert_eq!(supervisor.runtime.bound_port, None);
+        assert_eq!(supervisor.runtime.started_at, None);
+        assert_eq!(supervisor.runtime.last_error, None);
     }
 
     #[test]
@@ -2614,6 +2661,12 @@ mod tests {
 
         assert_eq!(position.x, 290);
         assert_eq!(position.y, 32);
+    }
+
+    #[test]
+    fn menu_bar_tray_uses_visible_title_while_packaged_icon_is_diagnosed() {
+        assert_eq!(MENU_BAR_TRAY_TITLE, "parallel");
+        assert!(MENU_BAR_TRAY_SHOW_MENU_ON_LEFT_CLICK);
     }
 
     #[test]
