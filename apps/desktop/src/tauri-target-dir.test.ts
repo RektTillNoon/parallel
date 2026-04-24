@@ -61,4 +61,26 @@ describe('desktop tauri script', () => {
       alwaysOnTop: true,
     });
   });
+
+  it('packages macOS as a UIElement so the tray owns the cold-start surface', () => {
+    const infoPlist = readFileSync(
+      new URL('../src-tauri/Info.plist', import.meta.url),
+      'utf8',
+    );
+
+    expect(infoPlist).toContain('<key>LSUIElement</key>');
+    expect(infoPlist).toContain('<true/>');
+  });
+
+  it('does not configure a second tray icon in tauri config', () => {
+    const tauriConfig = JSON.parse(
+      readFileSync(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8'),
+    ) as {
+      app?: {
+        trayIcon?: unknown;
+      };
+    };
+
+    expect(tauriConfig.app).not.toHaveProperty('trayIcon');
+  });
 });

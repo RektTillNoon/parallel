@@ -34,6 +34,7 @@ use parallel_workflow_core::{
 };
 use serde::{Deserialize, Serialize};
 use tauri::{
+    image::Image,
     menu::{Menu, MenuBuilder, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, PhysicalPosition, RunEvent, State, WindowEvent,
@@ -144,11 +145,25 @@ const DESKTOP_ACTOR_ID: &str = "desktop-user";
 const DEFAULT_PROJECT_KIND: &str = "software";
 const DASHBOARD_WINDOW_LABEL: &str = "main";
 const MENU_BAR_WINDOW_LABEL: &str = "menubar";
-const MENU_BAR_TRAY_TITLE: &str = "parallel";
-const MENU_BAR_TRAY_SHOW_MENU_ON_LEFT_CLICK: bool = true;
+const MENU_BAR_TRAY_VISIBLE_TITLE: Option<&str> = Some("      ");
+const MENU_BAR_TRAY_ICON_AS_TEMPLATE: bool = true;
+const MENU_BAR_TRAY_ICON_SIZE: u32 = 18;
+const MENU_BAR_TRAY_SHOW_MENU_ON_LEFT_CLICK: bool = false;
+#[cfg(test)]
+const MENU_BAR_TRAY_USES_DEDICATED_ICON: bool = true;
+#[cfg(test)]
+const MENU_BAR_TRAY_BUILD_PHASE: &str = "setup";
+#[cfg(test)]
+const MENU_BAR_ACTIVATION_PHASE: &str = "after-tray";
 const WORKFLOW_TOPOLOGY_EVENT: &str = "workflow://topology-changed";
 const WORKFLOW_SNAPSHOT_EVENT: &str = "workflow://snapshot-changed";
 const LOCAL_WRITE_SUPPRESSION_WINDOW_MS: u64 = 1500;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DesktopActivationMode {
+    Dashboard,
+    MenuBar,
+}
 
 fn app_support_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path().app_data_dir().map_err(|error| error.to_string())
@@ -1211,7 +1226,11 @@ fn sync_tray(app: &AppHandle, state: &AppState, payload: &LoadStatePayload) -> R
     if let Some(tray) = app.tray_by_id("workflow-tray") {
         tray.set_menu(Some(build_tray_menu(app, &snapshot)?))
             .map_err(|error| error.to_string())?;
-        tray.set_title(Some(MENU_BAR_TRAY_TITLE))
+        tray.set_icon(Some(menu_bar_tray_icon()))
+            .map_err(|error| error.to_string())?;
+        tray.set_title(MENU_BAR_TRAY_VISIBLE_TITLE)
+            .map_err(|error| error.to_string())?;
+        tray.set_icon_as_template(MENU_BAR_TRAY_ICON_AS_TEMPLATE)
             .map_err(|error| error.to_string())?;
         tray.set_tooltip(Some(snapshot.tooltip))
             .map_err(|error| error.to_string())?;
@@ -1220,6 +1239,7 @@ fn sync_tray(app: &AppHandle, state: &AppState, payload: &LoadStatePayload) -> R
 }
 
 fn open_main_window(app: &AppHandle) -> Result<(), String> {
+    set_desktop_activation_mode(app, activation_mode_for_dashboard_visible(true))?;
     let window = app
         .get_webview_window(DASHBOARD_WINDOW_LABEL)
         .ok_or_else(|| "main window missing".to_string())?;
@@ -1237,7 +1257,8 @@ fn hide_dashboard_window(app: &AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window(DASHBOARD_WINDOW_LABEL)
         .ok_or_else(|| "main window missing".to_string())?;
-    window.hide().map_err(|error| error.to_string())
+    window.hide().map_err(|error| error.to_string())?;
+    set_desktop_activation_mode(app, activation_mode_for_dashboard_visible(false))
 }
 
 fn should_hide_menu_bar_popover_on_blur(label: &str, focused: bool) -> bool {
@@ -2120,19 +2141,32 @@ fn quit_app_cmd(app: AppHandle, state: State<AppState>) -> Result<(), String> {
 }
 
 fn build_tray(app: &AppHandle, state: &AppState) -> Result<(), String> {
+    {
+        let guard = state
+            .tray_menu
+            .lock()
+            .map_err(|_| "tray mutex poisoned".to_string())?;
+        if guard.is_some() {
+            return Ok(());
+        }
+    }
+
     let snapshot = empty_tray_board_snapshot();
     let menu = build_tray_menu(app, &snapshot)?;
 
-    let tray = TrayIconBuilder::with_id("workflow-tray")
+    let tray_builder = TrayIconBuilder::with_id("workflow-tray")
         .menu(&menu)
-        .icon(
-            app.default_window_icon()
-                .cloned()
-                .ok_or_else(|| "default window icon missing".to_string())?,
-        )
-        .title(MENU_BAR_TRAY_TITLE)
+        .icon(menu_bar_tray_icon())
+        .icon_as_template(MENU_BAR_TRAY_ICON_AS_TEMPLATE)
         .tooltip(&snapshot.tooltip)
-        .show_menu_on_left_click(MENU_BAR_TRAY_SHOW_MENU_ON_LEFT_CLICK)
+        .show_menu_on_left_click(MENU_BAR_TRAY_SHOW_MENU_ON_LEFT_CLICK);
+    let tray_builder = if let Some(title) = MENU_BAR_TRAY_VISIBLE_TITLE {
+        tray_builder.title(title)
+    } else {
+        tray_builder
+    };
+
+    let tray = tray_builder
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open" => {
                 let _ = open_main_window(app);
@@ -2155,6 +2189,10 @@ fn build_tray(app: &AppHandle, state: &AppState) -> Result<(), String> {
         })
         .build(app)
         .map_err(|error| error.to_string())?;
+    tray.set_icon(Some(menu_bar_tray_icon()))
+        .map_err(|error| error.to_string())?;
+    tray.set_icon_as_template(MENU_BAR_TRAY_ICON_AS_TEMPLATE)
+        .map_err(|error| error.to_string())?;
     tray.set_visible(true).map_err(|error| error.to_string())?;
 
     let mut guard = state
@@ -2165,6 +2203,29 @@ fn build_tray(app: &AppHandle, state: &AppState) -> Result<(), String> {
     Ok(())
 }
 
+fn menu_bar_tray_icon() -> Image<'static> {
+    let size = MENU_BAR_TRAY_ICON_SIZE;
+    let mut rgba = vec![0_u8; (size * size * 4) as usize];
+
+    let mut fill_rect = |x0: u32, y0: u32, width: u32, height: u32| {
+        for y in y0..(y0 + height) {
+            for x in x0..(x0 + width) {
+                let offset = ((y * size + x) * 4) as usize;
+                rgba[offset] = 0;
+                rgba[offset + 1] = 0;
+                rgba[offset + 2] = 0;
+                rgba[offset + 3] = 255;
+            }
+        }
+    };
+
+    fill_rect(4, 3, 3, 12);
+    fill_rect(11, 3, 3, 12);
+    fill_rect(3, 14, 12, 2);
+
+    Image::new_owned(rgba, size, size)
+}
+
 fn configure_menu_bar_activation(app: &mut tauri::App) {
     #[cfg(target_os = "macos")]
     {
@@ -2172,12 +2233,46 @@ fn configure_menu_bar_activation(app: &mut tauri::App) {
     }
 }
 
+fn set_desktop_activation_mode(
+    app: &AppHandle,
+    mode: DesktopActivationMode,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let policy = match mode {
+            DesktopActivationMode::Dashboard => tauri::ActivationPolicy::Regular,
+            DesktopActivationMode::MenuBar => tauri::ActivationPolicy::Accessory,
+        };
+        app.set_activation_policy(policy)
+            .map_err(|error| error.to_string())?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        let _ = mode;
+    }
+    Ok(())
+}
+
+fn activation_mode_for_dashboard_visible(visible: bool) -> DesktopActivationMode {
+    if visible {
+        DesktopActivationMode::Dashboard
+    } else {
+        DesktopActivationMode::MenuBar
+    }
+}
+
+fn should_open_dashboard_on_launch(args: &[String]) -> bool {
+    !args
+        .iter()
+        .any(|arg| arg == "--background" || arg == "--menubar-only")
+}
+
 fn main() {
     init_tracing();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            configure_menu_bar_activation(app);
             let support_dir = app_support_dir(app.handle())?;
             fs::create_dir_all(&support_dir).map_err(|error| error.to_string())?;
             let index_db_path = resolve_desktop_index_db_path(app.handle())?;
@@ -2199,8 +2294,12 @@ fn main() {
             };
 
             app.manage(state);
+            {
+                let state_ref = app.state::<AppState>();
+                build_tray(app.handle(), &state_ref)?;
+            }
+            configure_menu_bar_activation(app);
             let state_ref = app.state::<AppState>();
-            build_tray(app.handle(), &state_ref)?;
             let settings = ensure_settings(&state_ref)?;
             save_settings(&state_ref, &settings)?;
             reload_watcher(app.handle(), &state_ref, &settings)?;
@@ -2209,6 +2308,10 @@ fn main() {
                 let _ = app.handle().emit(WORKFLOW_TOPOLOGY_EVENT, ());
             } else {
                 let _ = load_state_payload(app.handle(), &state_ref);
+            }
+            let launch_args = env::args().collect::<Vec<_>>();
+            if should_open_dashboard_on_launch(&launch_args) {
+                let _ = open_main_window(app.handle());
             }
             Ok(())
         })
@@ -2656,6 +2759,18 @@ mod tests {
     }
 
     #[test]
+    fn dashboard_visibility_drives_activation_mode() {
+        assert_eq!(
+            activation_mode_for_dashboard_visible(true),
+            DesktopActivationMode::Dashboard
+        );
+        assert_eq!(
+            activation_mode_for_dashboard_visible(false),
+            DesktopActivationMode::MenuBar
+        );
+    }
+
+    #[test]
     fn menu_bar_popover_position_centers_under_tray_click() {
         let position = menu_bar_popover_position(500.0, 24.0, 420);
 
@@ -2664,9 +2779,38 @@ mod tests {
     }
 
     #[test]
-    fn menu_bar_tray_uses_visible_title_while_packaged_icon_is_diagnosed() {
-        assert_eq!(MENU_BAR_TRAY_TITLE, "parallel");
-        assert!(MENU_BAR_TRAY_SHOW_MENU_ON_LEFT_CLICK);
+    fn menu_bar_tray_is_icon_only_without_visible_text() {
+        assert!(MENU_BAR_TRAY_USES_DEDICATED_ICON);
+        assert!(MENU_BAR_TRAY_ICON_AS_TEMPLATE);
+        assert!(MENU_BAR_TRAY_VISIBLE_TITLE.is_some());
+        assert_eq!(MENU_BAR_TRAY_VISIBLE_TITLE.unwrap().trim(), "");
+        assert!(!MENU_BAR_TRAY_SHOW_MENU_ON_LEFT_CLICK);
+        assert_eq!(MENU_BAR_TRAY_BUILD_PHASE, "setup");
+        assert_eq!(MENU_BAR_ACTIVATION_PHASE, "after-tray");
+    }
+
+    #[test]
+    fn menu_bar_tray_uses_dedicated_compact_glyph() {
+        let icon = menu_bar_tray_icon();
+
+        assert_eq!(icon.width(), MENU_BAR_TRAY_ICON_SIZE);
+        assert_eq!(icon.height(), MENU_BAR_TRAY_ICON_SIZE);
+        assert!(icon.rgba().chunks_exact(4).any(|pixel| pixel[3] > 0));
+    }
+
+    #[test]
+    fn manual_launch_opens_dashboard_unless_background_flag_is_set() {
+        assert!(should_open_dashboard_on_launch(&[
+            "/Applications/parallel.app/Contents/MacOS/parallel-desktop".to_string(),
+        ]));
+        assert!(!should_open_dashboard_on_launch(&[
+            "/Applications/parallel.app/Contents/MacOS/parallel-desktop".to_string(),
+            "--menubar-only".to_string(),
+        ]));
+        assert!(!should_open_dashboard_on_launch(&[
+            "/Applications/parallel.app/Contents/MacOS/parallel-desktop".to_string(),
+            "--background".to_string(),
+        ]));
     }
 
     #[test]
