@@ -22,8 +22,8 @@ pub use models::{
     BoardStepDetail, DecisionProposal, DecisionProposalInput, DecisionProposalStatus,
     DiscoverySource, EnsureSessionInput, InitProjectInput, Manifest, MutationActor, Phase, Plan,
     PlanSyncPhaseInput, PlanSyncStepInput, PlanSyncSubtaskInput, ProjectDetail, ProjectSummary,
-    RuntimePatchInput, RuntimeState, SessionContextInput, SessionStatus, SessionsFile, Step,
-    StepStatus, Subtask, SubtaskStatus, SyncPlanInput, WorkflowSession,
+    RecordExecutionInput, RuntimePatchInput, RuntimeState, SessionContextInput, SessionStatus,
+    SessionsFile, Step, StepStatus, Subtask, SubtaskStatus, SyncPlanInput, WorkflowSession,
 };
 pub use read_model::{
     board_project_detail as get_board_project_detail, list_indexed_projects, list_projects,
@@ -35,6 +35,6 @@ pub use resolver::{
 pub use services::{
     accept_decision, add_blocker, add_note, add_watched_root_index_state, append_activity_event,
     clear_blocker, complete_step, ensure_session, get_project, init_project, list_watched_roots,
-    missing_watched_root_coverage, propose_decision, refresh_handoff,
+    missing_watched_root_coverage, propose_decision, record_execution, refresh_handoff,
     remove_watched_root_index_state, start_step, sync_plan, update_runtime,
 };

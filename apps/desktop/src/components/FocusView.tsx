@@ -72,9 +72,9 @@ export default memo(function FocusView({ project, detail, session, summary }: Fo
         <p className="focus-step-body">{summary}</p>
       </article>
 
-      <section className="focus-feed" aria-label="Recent activity">
+      <section className="focus-feed" aria-label="Execution timeline">
         <header className="focus-feed-head">
-          <h3>Recent activity</h3>
+          <h3>Execution timeline</h3>
           {compact.entries.length > 0 ? (
             <span className="focus-feed-count">{compact.entries.length}</span>
           ) : null}
@@ -97,7 +97,22 @@ export default memo(function FocusView({ project, detail, session, summary }: Fo
                   style={{ ['--entry-hue' as string]: `${(index * 47) % 360}` }}
                   aria-hidden="true"
                 />
-                <span className="focus-feed-text">{entry.summary}</span>
+                <span className="focus-feed-body">
+                  <span className="focus-feed-meta">
+                    <span>{entry.type}</span>
+                    {entry.sessionId ? <span>{entry.sessionId}</span> : null}
+                    {entry.stepId ? <span>{entry.stepId}</span> : null}
+                    <span>{entry.actor}</span>
+                  </span>
+                  <span className="focus-feed-text">{entry.summary}</span>
+                  {entry.blockers.length > 0 ? (
+                    <span className="focus-feed-blockers">
+                      {entry.blockers.map((blocker) => (
+                        <span key={blocker}>{blocker}</span>
+                      ))}
+                    </span>
+                  ) : null}
+                </span>
               </li>
             ))}
             {compact.hiddenCount > 0 ? (

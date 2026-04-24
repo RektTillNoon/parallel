@@ -14,9 +14,9 @@ use crate::models::{
     AcceptedDecision, ActivityEvent, ActivitySource, AppendActivityInput, DecisionProposal,
     DecisionProposalInput, DecisionProposalStatus, DecisionProposalsFile, EnsureSessionInput,
     InitProjectInput, Manifest, MutationActor, Phase, Plan, PlanSyncPhaseInput, ProjectDetail,
-    ProjectIndexRecord, ProjectSummary, RuntimePatchInput, RuntimeState, SessionContextInput,
-    SessionStatus, SessionsFile, Step, StepStatus, Subtask, SubtaskStatus, SyncPlanInput,
-    WorkflowSession,
+    ProjectIndexRecord, ProjectSummary, RecordExecutionInput, RuntimePatchInput, RuntimeState,
+    SessionContextInput, SessionStatus, SessionsFile, Step, StepStatus, Subtask, SubtaskStatus,
+    SyncPlanInput, WorkflowSession,
 };
 use crate::root_paths::{canonicalize_root, most_specific_watched_root, normalize_roots};
 use crate::storage_yaml::{
@@ -1744,6 +1744,107 @@ pub fn append_activity_event(root: &str, event: AppendActivityInput) -> Result<P
                 session_id: session.map(|session| session.id),
                 step_id: event.step_id.clone(),
                 subtask_id: event.subtask_id.clone(),
+            },
+        })
+    })
+}
+
+pub fn record_execution(input: RecordExecutionInput) -> Result<ProjectDetail> {
+    let summary = normalize_activity_summary(&input.summary)?;
+    let actor = MutationActor {
+        actor: input.actor.clone(),
+        source: input.source,
+    };
+    mutate_project(&input.root, &actor, &input.index_db_path, |mut data| {
+        let now = now_iso();
+        let branch = input
+            .branch
+            .clone()
+            .or_else(|| read_git_branch(&input.root).ok().flatten());
+        let session = ensure_session_record(
+            &mut data.sessions,
+            &actor,
+            branch.clone(),
+            &SessionContextInput {
+                session_id: input.session_id.clone(),
+                session_title: input.session_title.clone(),
+                branch: branch.clone(),
+            },
+            &now,
+        );
+
+        let mut blockers = data.runtime.blockers.clone();
+        let mut payload = input.payload.clone().unwrap_or_else(|| json!({}));
+        if !payload.is_object() {
+            payload = json!({ "details": payload });
+        }
+        let payload_object = payload.as_object_mut().expect("payload is object");
+
+        if input.clear_all_blockers {
+            blockers.clear();
+            payload_object.insert("clearedBlockers".to_string(), json!("all"));
+        } else if let Some(clear_blocker) = input
+            .clear_blocker
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            blockers.retain(|candidate| candidate != clear_blocker);
+            payload_object.insert("clearedBlocker".to_string(), json!(clear_blocker));
+        }
+
+        if let Some(blocker) = input
+            .blocker
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            if !blockers.iter().any(|candidate| candidate == blocker) {
+                blockers.push(blocker.to_string());
+            }
+            payload_object.insert("blocker".to_string(), json!(blocker));
+        }
+
+        let event_step_id = input
+            .step_id
+            .clone()
+            .or_else(|| session.owned_step_id.clone())
+            .or_else(|| data.runtime.current_step_id.clone());
+        if let Some(session_mut) = data
+            .sessions
+            .sessions
+            .iter_mut()
+            .find(|candidate| candidate.id == session.id)
+        {
+            ensure_observed_step(session_mut, event_step_id.as_deref());
+            session_mut.last_updated_at = now.clone();
+        }
+
+        let next_runtime = refresh_runtime_state(
+            &mut data.plan,
+            &RuntimeState {
+                blockers,
+                focus_session_id: Some(session.id.clone()),
+                last_updated_at: now.clone(),
+                ..data.runtime.clone()
+            },
+            &mut data.sessions,
+            branch.or_else(|| data.runtime.active_branch.clone()),
+            &now,
+        );
+
+        Ok(MutateProjectResult {
+            summary,
+            event_type: "execution.updated".to_string(),
+            payload,
+            write_plan: Some(data.plan),
+            write_runtime: Some(next_runtime),
+            write_sessions: Some(data.sessions),
+            write_proposals: None,
+            event_context: EventContext {
+                session_id: Some(session.id),
+                step_id: event_step_id,
+                subtask_id: input.subtask_id.clone(),
             },
         })
     })

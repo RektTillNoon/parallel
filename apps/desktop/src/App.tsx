@@ -16,6 +16,7 @@ import {
   getCliInstallStatus,
   getAgentDefaultsStatus,
   getBridgeClientSnippets,
+  getBridgeDoctor,
   getBridgeStatus,
   initProject,
   installCli,
@@ -52,6 +53,7 @@ import type {
   AgentTargetStatus,
   BoardProjectDetail,
   BridgeStateEvent,
+  BridgeDoctorReport,
   CliInstallStatus,
   LoadStatePayload,
   ProjectSummary,
@@ -134,6 +136,39 @@ export const projectInitPrompt = 'Initialize workflow for this project.';
 export const noProjectsInRootsMessage = 'No projects in current roots.';
 export const emptySelectionMessage = 'Pick a project to see what you left off with.';
 
+export type EmptyStateCopy = {
+  title: string;
+  detail: string | null;
+  actionLabel: string | null;
+};
+
+export function buildEmptyState(
+  noProjectsDiscovered: boolean,
+  context: { hasState: boolean; watchedRootCount: number },
+): EmptyStateCopy {
+  if (context.hasState && context.watchedRootCount === 0) {
+    return {
+      title: 'Add a project root to start.',
+      detail: 'Parallel watches folders where Codex or Claude Code work happens.',
+      actionLabel: 'Open setup',
+    };
+  }
+
+  if (noProjectsDiscovered) {
+    return {
+      title: noProjectsInRootsMessage,
+      detail: 'Use Sync after adding or initializing a workflow in one of the watched folders.',
+      actionLabel: null,
+    };
+  }
+
+  return {
+    title: emptySelectionMessage,
+    detail: null,
+    actionLabel: null,
+  };
+}
+
 function startViewTransition(update: () => void) {
   const nextDocument = document as ViewTransitionDocument;
   if (
@@ -164,6 +199,8 @@ export default function App() {
   const [agentDefaultsOpen, setAgentDefaultsOpen] = useState(true);
   const [cliStatus, setCliStatus] = useState<CliInstallStatus | null>(null);
   const [agentStatuses, setAgentStatuses] = useState<AgentTargetStatus[] | null>(null);
+  const [bridgeDoctor, setBridgeDoctor] = useState<BridgeDoctorReport | null>(null);
+  const [bridgeDoctorPending, setBridgeDoctorPending] = useState(false);
   const [agentPendingKind, setAgentPendingKind] = useState<string | null>(null);
   const [cliPending, setCliPending] = useState(false);
   const reloadInFlight = useRef(false);
@@ -269,6 +306,20 @@ export default function App() {
       );
     } catch {
       // Keep the last visible bridge snapshot if a background reconcile misses.
+    }
+  }, []);
+
+  const handleRunBridgeDoctor = useCallback(async () => {
+    setBridgeDoctorPending(true);
+    try {
+      const report = await getBridgeDoctor();
+      setBridgeDoctor(report);
+      return report;
+    } catch (doctorError) {
+      setError(doctorError instanceof Error ? doctorError.message : String(doctorError));
+      return null;
+    } finally {
+      setBridgeDoctorPending(false);
     }
   }, []);
 
@@ -419,19 +470,36 @@ export default function App() {
 
     let active = true;
     void (async () => {
-      try {
-        const [status, nextAgentStatuses] = await Promise.all([
-          getCliInstallStatus(),
-          getAgentDefaultsStatus(),
-        ]);
-        if (active) {
-          setCliStatus(status);
-          setAgentStatuses(nextAgentStatuses);
-        }
-      } catch (cliError) {
-        if (active) {
-          setError(cliError instanceof Error ? cliError.message : String(cliError));
-        }
+      const [cliResult, agentResult, doctorResult] = await Promise.allSettled([
+        getCliInstallStatus(),
+        getAgentDefaultsStatus(),
+        getBridgeDoctor(),
+      ]);
+      if (!active) {
+        return;
+      }
+
+      if (cliResult.status === 'fulfilled' && agentResult.status === 'fulfilled') {
+        setCliStatus(cliResult.value);
+        setAgentStatuses(agentResult.value);
+      } else {
+        const setupError =
+          cliResult.status === 'rejected'
+            ? cliResult.reason
+            : agentResult.status === 'rejected'
+              ? agentResult.reason
+              : null;
+        setError(setupError instanceof Error ? setupError.message : String(setupError));
+      }
+
+      if (doctorResult.status === 'fulfilled') {
+        setBridgeDoctor(doctorResult.value);
+      } else {
+        setError(
+          doctorResult.reason instanceof Error
+            ? doctorResult.reason.message
+            : String(doctorResult.reason),
+        );
       }
     })();
 
@@ -493,6 +561,10 @@ export default function App() {
 
   const noProjectsDiscovered =
     !loading && Boolean(state) && state.settings.watchedRoots.length > 0 && state.projects.length === 0;
+  const emptyStateCopy = buildEmptyState(noProjectsDiscovered, {
+    hasState: Boolean(state),
+    watchedRootCount: state?.settings.watchedRoots.length ?? 0,
+  });
 
   useEffect(() => {
     if (!settingsOpen) {
@@ -574,20 +646,22 @@ export default function App() {
     try {
       const nextState = await restartBridge();
       await applyLoadState(nextState);
+      void handleRunBridgeDoctor();
     } catch (mutationError) {
       setError(mutationError instanceof Error ? mutationError.message : String(mutationError));
     }
-  }, [applyLoadState]);
+  }, [applyLoadState, handleRunBridgeDoctor]);
 
   const handleRegenerateBridgeToken = useCallback(async () => {
     setError(null);
     try {
       const nextState = await regenerateBridgeToken();
       await applyLoadState(nextState);
+      void handleRunBridgeDoctor();
     } catch (mutationError) {
       setError(mutationError instanceof Error ? mutationError.message : String(mutationError));
     }
-  }, [applyLoadState]);
+  }, [applyLoadState, handleRunBridgeDoctor]);
 
   const handleInitProject = useCallback(async () => {
     if (!selectedSummary) {
@@ -696,6 +770,15 @@ export default function App() {
     () => startViewTransition(() => setSettingsOpen((open) => !open)),
     [],
   );
+  const handleOpenSetup = useCallback(
+    () =>
+      startViewTransition(() => {
+        setSettingsOpen(true);
+        setRootsOpen(true);
+        setBridgeOpen(true);
+      }),
+    [],
+  );
   const handleCloseSettings = useCallback(() => startViewTransition(() => setSettingsOpen(false)), []);
   const handleToggleRoots = useCallback(() => setRootsOpen((open) => !open), []);
   const handleToggleBridge = useCallback(() => setBridgeOpen((open) => !open), []);
@@ -783,7 +866,13 @@ export default function App() {
 
         {!loading && !selectedSummary ? (
           <div className="empty-state">
-            {noProjectsDiscovered ? noProjectsInRootsMessage : emptySelectionMessage}
+            <h2>{emptyStateCopy.title}</h2>
+            {emptyStateCopy.detail ? <p>{emptyStateCopy.detail}</p> : null}
+            {emptyStateCopy.actionLabel ? (
+              <button type="button" onClick={handleOpenSetup}>
+                {emptyStateCopy.actionLabel}
+              </button>
+            ) : null}
           </div>
         ) : null}
       </main>
@@ -814,6 +903,9 @@ export default function App() {
             onRegenerateBridgeToken={() => void handleRegenerateBridgeToken()}
             onCopyBridgeSnippet={(kind) => void handleCopyBridgeSnippet(kind)}
             onCopyCodexTokenExport={() => void handleCopyCodexTokenExport()}
+            bridgeDoctor={bridgeDoctor}
+            bridgeDoctorPending={bridgeDoctorPending}
+            onRunBridgeDoctor={() => void handleRunBridgeDoctor()}
             agentDefaultsOpen={agentDefaultsOpen}
             onToggleAgentDefaults={handleToggleAgentDefaults}
             agentStatuses={agentStatuses}

@@ -74,13 +74,36 @@ describe('compactActivityEntries', () => {
 
   it('adds compact relative timestamps for feed rendering', () => {
     const compact = compactActivityEntries([
-      activity('Started step', '2026-04-16T17:00:00Z'),
+      {
+        ...activity('Started step', '2026-04-16T17:00:00Z'),
+        type: 'execution.updated',
+        step_id: 'capture-requirements',
+        payload: { blockers: ['waiting on review'] },
+      },
     ]);
 
     expect(compact.entries[0]).toMatchObject({
       summary: 'Started step',
       bucket: '3h',
       source: 'agent',
+      type: 'execution.updated',
+      sessionId: 'session-1',
+      stepId: 'capture-requirements',
+      blockers: ['waiting on review'],
+    });
+  });
+
+  it('treats legacy null payload activity as having no blockers', () => {
+    const compact = compactActivityEntries([
+      {
+        ...activity('Legacy note', '2026-04-16T17:00:00Z'),
+        payload: null,
+      } as unknown as ActivityEvent,
+    ]);
+
+    expect(compact.entries[0]).toMatchObject({
+      summary: 'Legacy note',
+      blockers: [],
     });
   });
 });

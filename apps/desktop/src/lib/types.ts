@@ -65,6 +65,24 @@ export interface AgentTargetStatus {
   changedPaths: string[];
 }
 
+export type BridgeDoctorCheckStatus = 'ready' | 'action' | 'error';
+export type BridgeDoctorStatus = 'ready' | 'action_needed' | 'error';
+
+export interface BridgeDoctorCheck {
+  id: string;
+  label: string;
+  status: BridgeDoctorCheckStatus;
+  detail: string;
+}
+
+export interface BridgeDoctorReport {
+  status: BridgeDoctorStatus;
+  label: string;
+  summary: string;
+  checks: BridgeDoctorCheck[];
+  nextSteps: string[];
+}
+
 export interface ProjectSummary {
   id: string | null;
   name: string;

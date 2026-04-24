@@ -7,7 +7,9 @@
   ],
   "scripts": {
     "build": "pnpm -r build",
-    "test": "pnpm -r test && cargo test",
+    "test": "pnpm test:scripts && pnpm -r test && cargo test",
+    "test:scripts": "vitest run scripts/*.test.mjs",
+    "smoke:bridge": "cargo build -p parallel-projectctl && node scripts/bridge-smoke.mjs --projectctl target/debug/projectctl",
     "dev:desktop": "pnpm --filter @parallel/desktop tauri dev",
     "build:desktop": "pnpm --filter @parallel/desktop tauri build"
   },

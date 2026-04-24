@@ -43,11 +43,11 @@ const detail = {
       source: 'agent',
       project_id: 'trading-1',
       session_id: 'session-1',
-      step_id: null,
+      step_id: 'capture-requirements',
       subtask_id: null,
-      type: 'note',
+      type: 'execution.updated',
       summary: 'Fixed backfill-hyperliquid run TTY output',
-      payload: {},
+      payload: { blockers: ['waiting on review'] },
     },
     {
       timestamp: '2026-04-16T19:40:00Z',
@@ -57,7 +57,7 @@ const detail = {
       session_id: 'session-1',
       step_id: null,
       subtask_id: null,
-      type: 'note',
+      type: 'note.added',
       summary: 'Verified top-level backfill output',
       payload: {},
     },
@@ -112,7 +112,7 @@ describe('FocusView', () => {
     vi.useRealTimers();
   });
 
-  it('leads with when and what, then lists recent activity', () => {
+  it('leads with when and what, then renders one execution timeline', () => {
     const html = renderToStaticMarkup(
       <FocusView
         project={project}
@@ -129,7 +129,11 @@ describe('FocusView', () => {
     expect(html).toContain('unclaimed');
     expect(html).toContain('Working on');
     expect(html).toContain('Write the initial problem statement and success criteria.');
-    expect(html).toContain('Recent activity');
+    expect(html).toContain('Execution timeline');
+    expect(html).toContain('execution.updated');
+    expect(html).toContain('session-1');
+    expect(html).toContain('capture-requirements');
+    expect(html).toContain('waiting on review');
     expect(html).toContain('Fixed backfill-hyperliquid run TTY output');
     expect(html).toContain('Verified top-level backfill output');
     expect(html).toContain('focus-feed-dot');

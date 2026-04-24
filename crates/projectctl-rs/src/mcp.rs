@@ -13,10 +13,11 @@ use axum::{
 };
 use parallel_workflow_core::{
     add_blocker, append_activity_event, clear_blocker, complete_step, ensure_session, get_project,
-    list_projects, propose_decision, refresh_handoff, resolve_watched_roots, start_step, sync_plan,
-    update_runtime, ActivitySource, AppendActivityInput, DecisionProposalInput, EnsureSessionInput,
-    MutationActor, PlanSyncPhaseInput, PlanSyncStepInput, PlanSyncSubtaskInput,
-    RootResolutionSurface, RuntimePatchInput, SessionContextInput, SubtaskStatus, SyncPlanInput,
+    list_projects, propose_decision, record_execution, refresh_handoff, resolve_watched_roots,
+    start_step, sync_plan, update_runtime, ActivitySource, AppendActivityInput,
+    DecisionProposalInput, EnsureSessionInput, MutationActor, PlanSyncPhaseInput,
+    PlanSyncStepInput, PlanSyncSubtaskInput, RecordExecutionInput, RootResolutionSurface,
+    RuntimePatchInput, SessionContextInput, SubtaskStatus, SyncPlanInput,
 };
 use schemars::{schema_for, JsonSchema};
 use serde::{Deserialize, Serialize};
@@ -195,6 +196,58 @@ struct UpdateRuntimeArgs {
     patch: Map<String, Value>,
     #[serde(default)]
     event_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct LogProgressArgs {
+    root: String,
+    #[serde(default = "default_mcp_actor")]
+    actor: String,
+    #[serde(default = "default_mcp_source")]
+    source: String,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    session_title: Option<String>,
+    #[serde(default)]
+    branch: Option<String>,
+    summary: String,
+    #[serde(default)]
+    step_id: Option<String>,
+    #[serde(default)]
+    subtask_id: Option<String>,
+    #[serde(default)]
+    payload: Option<Map<String, Value>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct RecordExecutionArgs {
+    root: String,
+    #[serde(default = "default_mcp_actor")]
+    actor: String,
+    #[serde(default = "default_mcp_source")]
+    source: String,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    session_title: Option<String>,
+    #[serde(default)]
+    branch: Option<String>,
+    summary: String,
+    #[serde(default)]
+    step_id: Option<String>,
+    #[serde(default)]
+    subtask_id: Option<String>,
+    #[serde(default)]
+    blocker: Option<String>,
+    #[serde(default)]
+    clear_blocker: Option<String>,
+    #[serde(default)]
+    clear_all_blockers: bool,
+    #[serde(default)]
+    payload: Option<Map<String, Value>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -631,6 +684,46 @@ impl ToolBackend for LocalBackend {
                     index_db_path: self.index_db_path.clone(),
                 })?)?)
             }
+            "log_progress" => {
+                let args: LogProgressArgs = serde_json::from_value(args)?;
+                Ok(serde_json::to_value(append_activity_event(
+                    &args.root,
+                    AppendActivityInput {
+                        actor: args.actor,
+                        source: parse_source(&args.source),
+                        session_id: args.session_id,
+                        session_title: args.session_title,
+                        branch: args.branch,
+                        event_type: "progress.logged".to_string(),
+                        summary: args.summary,
+                        payload: args.payload.map(Value::Object),
+                        step_id: args.step_id,
+                        subtask_id: args.subtask_id,
+                        index_db_path: self.index_db_path.clone(),
+                    },
+                )?)?)
+            }
+            "record_execution" => {
+                let args: RecordExecutionArgs = serde_json::from_value(args)?;
+                Ok(serde_json::to_value(record_execution(
+                    RecordExecutionInput {
+                        root: args.root,
+                        actor: args.actor,
+                        source: parse_source(&args.source),
+                        session_id: args.session_id,
+                        session_title: args.session_title,
+                        branch: args.branch,
+                        summary: args.summary,
+                        payload: args.payload.map(Value::Object),
+                        step_id: args.step_id,
+                        subtask_id: args.subtask_id,
+                        blocker: args.blocker,
+                        clear_blocker: args.clear_blocker,
+                        clear_all_blockers: args.clear_all_blockers,
+                        index_db_path: self.index_db_path.clone(),
+                    },
+                )?)?)
+            }
             "append_activity" => {
                 let args: AppendActivityArgs = serde_json::from_value(args)?;
                 Ok(serde_json::to_value(append_activity_event(
@@ -894,6 +987,18 @@ fn tool_definitions() -> Vec<ToolDescriptor> {
             input_schema: schema_for_value::<UpdateRuntimeArgs>(),
         },
         ToolDescriptor {
+            name: "log_progress",
+            title: "Log progress",
+            description: "Record a one-line progress update with MCP defaults; the canonical handoff is refreshed automatically.",
+            input_schema: schema_for_value::<LogProgressArgs>(),
+        },
+        ToolDescriptor {
+            name: "record_execution",
+            title: "Record execution",
+            description: "Record a one-line execution update, attach session and step context, optionally add or clear blockers, and return the refreshed project state.",
+            input_schema: schema_for_value::<RecordExecutionArgs>(),
+        },
+        ToolDescriptor {
             name: "append_activity",
             title: "Append activity",
             description: "Append a structured one-line activity event, optionally linked to a session, step, or subtask.",
@@ -1028,10 +1133,30 @@ mod tests {
             .filter_map(|tool| tool.get("name").and_then(Value::as_str))
             .collect::<Vec<_>>();
         assert!(names.contains(&"list_projects"));
+        assert!(names.contains(&"record_execution"));
+        assert!(names.contains(&"log_progress"));
         assert!(names.contains(&"complete_step"));
         assert!(names.contains(&"propose_decision"));
 
         handle.abort();
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_tool_contract_matches_snapshot() -> Result<()> {
+        let snapshot_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/generated/mcp-tools.snapshot.json");
+        let actual = serde_json::to_string_pretty(&tool_definitions())?;
+        if std::env::var_os("PARALLEL_UPDATE_MCP_SNAPSHOT").is_some() {
+            if let Some(parent) = snapshot_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&snapshot_path, format!("{actual}\n"))?;
+        }
+        let expected = fs::read_to_string(&snapshot_path)
+            .with_context(|| format!("missing MCP tool snapshot at {}", snapshot_path.display()))?;
+
+        assert_eq!(expected.trim(), actual.trim());
         Ok(())
     }
 
@@ -1086,6 +1211,172 @@ mod tests {
         assert_eq!(payload["manifest"]["name"], "Bridge");
 
         handle.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn log_progress_tool_records_progress_with_mcp_defaults() -> Result<()> {
+        let repo = create_repo()?;
+        let index_db = std::path::Path::new(&repo)
+            .join(".app/index.sqlite")
+            .display()
+            .to_string();
+        parallel_workflow_core::init_project(InitProjectInput {
+            root: repo.clone(),
+            actor: "tester".to_string(),
+            source: ActivitySource::Cli,
+            name: Some("Bridge".to_string()),
+            kind: Some("software".to_string()),
+            owner: Some("tester".to_string()),
+            tags: Some(Vec::new()),
+            index_db_path: index_db.clone(),
+        })?;
+
+        let backend = LocalBackend {
+            watched_roots: vec![repo.clone()],
+            index_db_path: index_db,
+        };
+        let payload = backend.execute(
+            "log_progress",
+            json!({
+                "root": repo,
+                "summary": "Narrowed MCP workflow to one progress-write intent."
+            }),
+        )?;
+
+        let activity = payload["recentActivity"].as_array().unwrap();
+        let logged = activity
+            .iter()
+            .find(|event| event["summary"] == "Narrowed MCP workflow to one progress-write intent.")
+            .expect("progress event should be present");
+        assert_eq!(logged["actor"], "mcp-agent");
+        assert_eq!(logged["source"], "mcp");
+        assert_eq!(logged["type"], "progress.logged");
+        assert!(payload["handoff"]
+            .as_str()
+            .unwrap()
+            .contains("Narrowed MCP workflow to one progress-write intent."));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn record_execution_tool_combines_progress_and_blocker_update() -> Result<()> {
+        let repo = create_repo()?;
+        let index_db = std::path::Path::new(&repo)
+            .join(".app/index.sqlite")
+            .display()
+            .to_string();
+        parallel_workflow_core::init_project(InitProjectInput {
+            root: repo.clone(),
+            actor: "tester".to_string(),
+            source: ActivitySource::Cli,
+            name: Some("Bridge".to_string()),
+            kind: Some("software".to_string()),
+            owner: Some("tester".to_string()),
+            tags: Some(Vec::new()),
+            index_db_path: index_db.clone(),
+        })?;
+
+        let backend = LocalBackend {
+            watched_roots: vec![repo.clone()],
+            index_db_path: index_db,
+        };
+        let payload = backend.execute(
+            "record_execution",
+            json!({
+                "root": repo,
+                "sessionId": "agent-session",
+                "sessionTitle": "Investigate MCP workflow",
+                "stepId": "capture-requirements",
+                "summary": "Confirmed remote-agent workflow needs one intent-level update.",
+                "blocker": "Waiting on release build validation."
+            }),
+        )?;
+
+        assert_eq!(
+            payload["runtime"]["next_action"],
+            "Start \"Capture requirements\""
+        );
+        assert_eq!(payload["runtime"]["status"], "blocked");
+        assert_eq!(
+            payload["blockers"],
+            json!(["Waiting on release build validation."])
+        );
+
+        let activity = payload["recentActivity"].as_array().unwrap();
+        let logged = activity
+            .iter()
+            .find(|event| {
+                event["summary"] == "Confirmed remote-agent workflow needs one intent-level update."
+            })
+            .expect("execution update event should be present");
+        assert_eq!(logged["actor"], "mcp-agent");
+        assert_eq!(logged["source"], "mcp");
+        assert_eq!(logged["session_id"], "agent-session");
+        assert_eq!(logged["step_id"], "capture-requirements");
+        assert_eq!(logged["type"], "execution.updated");
+        assert_eq!(
+            logged["payload"]["blocker"],
+            "Waiting on release build validation."
+        );
+        assert!(payload["handoff"]
+            .as_str()
+            .unwrap()
+            .contains("Confirmed remote-agent workflow needs one intent-level update."));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn record_execution_tool_clears_blocker_with_progress_update() -> Result<()> {
+        let repo = create_repo()?;
+        let index_db = std::path::Path::new(&repo)
+            .join(".app/index.sqlite")
+            .display()
+            .to_string();
+        parallel_workflow_core::init_project(InitProjectInput {
+            root: repo.clone(),
+            actor: "tester".to_string(),
+            source: ActivitySource::Cli,
+            name: Some("Bridge".to_string()),
+            kind: Some("software".to_string()),
+            owner: Some("tester".to_string()),
+            tags: Some(Vec::new()),
+            index_db_path: index_db.clone(),
+        })?;
+
+        let backend = LocalBackend {
+            watched_roots: vec![repo.clone()],
+            index_db_path: index_db,
+        };
+        backend.execute(
+            "record_execution",
+            json!({
+                "root": repo,
+                "summary": "Release build validation is still pending.",
+                "blocker": "Waiting on release build validation."
+            }),
+        )?;
+
+        let payload = backend.execute(
+            "record_execution",
+            json!({
+                "root": repo,
+                "summary": "Release build validation passed.",
+                "clearBlocker": "Waiting on release build validation."
+            }),
+        )?;
+
+        assert_eq!(payload["runtime"]["status"], "todo");
+        assert_eq!(payload["blockers"], json!([]));
+        let activity = payload["recentActivity"].as_array().unwrap();
+        let logged = activity
+            .iter()
+            .find(|event| event["summary"] == "Release build validation passed.")
+            .expect("clear blocker event should be present");
+        assert_eq!(
+            logged["payload"]["clearedBlocker"],
+            "Waiting on release build validation."
+        );
         Ok(())
     }
 }

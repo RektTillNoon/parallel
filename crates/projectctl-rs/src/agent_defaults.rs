@@ -920,7 +920,7 @@ fn upsert_managed_block(existing: Option<&str>, body: &str) -> String {
 }
 
 fn global_text_body() -> &'static str {
-    "When a task is about workflow state rather than code implementation, use Parallel through MCP or projectctl before proceeding.\n\nUse this sequence unless the task is clearly read-only:\n1. list_projects\n2. get_project\n3. ensure_session\n4. claim or start a step only when actively executing it\n5. append activity, blockers, and handoff through Parallel\n\nKeep activity and note summaries to one sentence, one line, and 140 characters or fewer.\nDo not edit workflow files directly unless repairing broken state.\nDo not use Parallel when modifying the Parallel product itself."
+    "When a task is about workflow state rather than code implementation, use Parallel through MCP or projectctl before proceeding.\n\nUse this sequence unless the task is clearly read-only:\n1. list_projects\n2. get_project\n3. ensure_session\n4. claim or start a step only when actively executing it\n5. record execution updates, blockers, and decisions through Parallel\n\nKeep progress and note summaries to one sentence, one line, and 140 characters or fewer.\nDo not manually refresh handoff after normal mutations; Parallel refreshes it automatically.\nDo not edit workflow files directly unless repairing broken state.\nDo not use Parallel when modifying the Parallel product itself."
 }
 
 fn repo_text_body() -> &'static str {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildEmptyState,
   buildVisibleProjects,
   choosePrimaryBoardRow,
   emptySelectionMessage,
@@ -103,6 +104,14 @@ describe('app copy', () => {
     expect(projectInitPrompt).toBe('Initialize workflow for this project.');
     expect(noProjectsInRootsMessage).toBe('No projects in current roots.');
     expect(emptySelectionMessage).toBe('Pick a project to see what you left off with.');
+  });
+
+  it('turns a blank install into a concrete first-run action', () => {
+    expect(buildEmptyState(false, { hasState: true, watchedRootCount: 0 })).toEqual({
+      title: 'Add a project root to start.',
+      detail: 'Parallel watches folders where Codex or Claude Code work happens.',
+      actionLabel: 'Open setup',
+    });
   });
 });
 

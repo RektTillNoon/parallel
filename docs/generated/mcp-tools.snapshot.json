@@ -1,0 +1,648 @@
+[
+  {
+    "name": "list_projects",
+    "title": "List projects",
+    "description": "List initialized and uninitialized projects under watched roots.",
+    "inputSchema": {
+      "properties": {
+        "roots": {
+          "default": null,
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "title": "ListProjectsArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_project",
+    "title": "Get project",
+    "description": "Return manifest, canonical plan, runtime focus, sessions, recent activity, blockers, pending proposals, and handoff text for a project.",
+    "inputSchema": {
+      "properties": {
+        "root": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "title": "GetProjectArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "sync_plan",
+    "title": "Sync plan",
+    "description": "Replace the canonical ordered project plan with the supplied phased plan.",
+    "inputSchema": {
+      "properties": {
+        "actor": {
+          "default": "mcp-agent",
+          "type": "string"
+        },
+        "branch": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "phases": {
+          "items": {
+            "$ref": "#/definitions/PlanPhasePayload"
+          },
+          "type": "array"
+        },
+        "root": {
+          "type": "string"
+        },
+        "sessionId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sessionTitle": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "default": "mcp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "phases",
+        "root"
+      ],
+      "title": "SyncPlanArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "ensure_session",
+    "title": "Ensure session",
+    "description": "Create or resume a workflow session for later step and activity writes.",
+    "inputSchema": {
+      "properties": {
+        "actor": {
+          "default": "mcp-agent",
+          "type": "string"
+        },
+        "branch": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "root": {
+          "type": "string"
+        },
+        "sessionId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sessionTitle": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "default": "mcp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "title": "EnsureSessionArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "update_runtime",
+    "title": "Update runtime",
+    "description": "Merge a validated runtime patch into the project runtime state.",
+    "inputSchema": {
+      "properties": {
+        "actor": {
+          "default": "mcp-agent",
+          "type": "string"
+        },
+        "eventType": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "patch": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "root": {
+          "type": "string"
+        },
+        "source": {
+          "default": "mcp",
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "patch",
+        "root",
+        "summary"
+      ],
+      "title": "UpdateRuntimeArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "log_progress",
+    "title": "Log progress",
+    "description": "Record a one-line progress update with MCP defaults; the canonical handoff is refreshed automatically.",
+    "inputSchema": {
+      "properties": {
+        "actor": {
+          "default": "mcp-agent",
+          "type": "string"
+        },
+        "branch": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "payload": {
+          "additionalProperties": true,
+          "default": null,
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "root": {
+          "type": "string"
+        },
+        "sessionId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sessionTitle": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "default": "mcp",
+          "type": "string"
+        },
+        "stepId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subtaskId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "root",
+        "summary"
+      ],
+      "title": "LogProgressArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "record_execution",
+    "title": "Record execution",
+    "description": "Record a one-line execution update, attach session and step context, optionally add or clear blockers, and return the refreshed project state.",
+    "inputSchema": {
+      "properties": {
+        "actor": {
+          "default": "mcp-agent",
+          "type": "string"
+        },
+        "blocker": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "branch": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "clearAllBlockers": {
+          "default": false,
+          "type": "boolean"
+        },
+        "clearBlocker": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "payload": {
+          "additionalProperties": true,
+          "default": null,
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "root": {
+          "type": "string"
+        },
+        "sessionId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sessionTitle": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "default": "mcp",
+          "type": "string"
+        },
+        "stepId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subtaskId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "root",
+        "summary"
+      ],
+      "title": "RecordExecutionArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "append_activity",
+    "title": "Append activity",
+    "description": "Append a structured one-line activity event, optionally linked to a session, step, or subtask.",
+    "inputSchema": {
+      "properties": {
+        "actor": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "default": null,
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "root": {
+          "type": "string"
+        },
+        "sessionId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sessionTitle": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "stepId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subtaskId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "actor",
+        "root",
+        "source",
+        "summary",
+        "type"
+      ],
+      "title": "AppendActivityArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "start_step",
+    "title": "Start step",
+    "description": "Move a step into in-progress state and claim ownership for a session.",
+    "inputSchema": {
+      "properties": {
+        "actor": {
+          "default": "mcp-agent",
+          "type": "string"
+        },
+        "branch": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "root": {
+          "type": "string"
+        },
+        "sessionId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sessionTitle": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "default": "mcp",
+          "type": "string"
+        },
+        "stepId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "root",
+        "stepId"
+      ],
+      "title": "StepMutationArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "complete_step",
+    "title": "Complete step",
+    "description": "Mark a step done and advance runtime focus to the next actionable step.",
+    "inputSchema": {
+      "properties": {
+        "actor": {
+          "default": "mcp-agent",
+          "type": "string"
+        },
+        "branch": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "root": {
+          "type": "string"
+        },
+        "sessionId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sessionTitle": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "default": "mcp",
+          "type": "string"
+        },
+        "stepId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "root",
+        "stepId"
+      ],
+      "title": "StepMutationArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "set_blocker",
+    "title": "Set blocker",
+    "description": "Add or clear a blocker on the current runtime state.",
+    "inputSchema": {
+      "properties": {
+        "actor": {
+          "default": "mcp-agent",
+          "type": "string"
+        },
+        "blocker": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "branch": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "clear": {
+          "default": false,
+          "type": "boolean"
+        },
+        "root": {
+          "type": "string"
+        },
+        "sessionId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sessionTitle": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "default": "mcp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "title": "SetBlockerArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "refresh_handoff",
+    "title": "Refresh handoff",
+    "description": "Regenerate the handoff snapshot for a project.",
+    "inputSchema": {
+      "properties": {
+        "actor": {
+          "default": "mcp-agent",
+          "type": "string"
+        },
+        "root": {
+          "type": "string"
+        },
+        "source": {
+          "default": "mcp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "title": "RefreshHandoffArgs",
+      "type": "object"
+    }
+  },
+  {
+    "name": "propose_decision",
+    "title": "Propose decision",
+    "description": "Create a pending decision proposal for later human acceptance.",
+    "inputSchema": {
+      "properties": {
+        "actor": {
+          "default": "mcp-agent",
+          "type": "string"
+        },
+        "context": {
+          "type": "string"
+        },
+        "decision": {
+          "type": "string"
+        },
+        "impact": {
+          "type": "string"
+        },
+        "root": {
+          "type": "string"
+        },
+        "sessionId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sessionTitle": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "default": "mcp",
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "context",
+        "decision",
+        "impact",
+        "root",
+        "title"
+      ],
+      "title": "ProposeDecisionArgs",
+      "type": "object"
+    }
+  }
+]

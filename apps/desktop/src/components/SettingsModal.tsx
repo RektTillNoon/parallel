@@ -5,7 +5,12 @@ import {
   describeCliInstallStatus,
   type BridgeStatusPresentation,
 } from '../lib/state';
-import type { AgentInstallAction, AgentTargetStatus, CliInstallStatus } from '../lib/types';
+import type {
+  AgentInstallAction,
+  AgentTargetStatus,
+  BridgeDoctorReport,
+  CliInstallStatus,
+} from '../lib/types';
 
 import CollapsibleSection from './CollapsibleSection';
 
@@ -33,6 +38,9 @@ type SettingsModalProps = {
   onRegenerateBridgeToken: () => void;
   onCopyBridgeSnippet: (kind: string) => void;
   onCopyCodexTokenExport: () => void;
+  bridgeDoctor: BridgeDoctorReport | null;
+  bridgeDoctorPending: boolean;
+  onRunBridgeDoctor: () => void;
   agentDefaultsOpen: boolean;
   onToggleAgentDefaults: () => void;
   agentStatuses: AgentTargetStatus[] | null;
@@ -68,6 +76,9 @@ export default function SettingsModal({
   onRegenerateBridgeToken,
   onCopyBridgeSnippet,
   onCopyCodexTokenExport,
+  bridgeDoctor,
+  bridgeDoctorPending,
+  onRunBridgeDoctor,
   agentDefaultsOpen,
   onToggleAgentDefaults,
   agentStatuses,
@@ -83,6 +94,15 @@ export default function SettingsModal({
   }
 
   const cliPresentation = describeCliInstallStatus(cliStatus);
+  const bridgeDoctorSteps = bridgeDoctor
+    ? bridgeDoctor.nextSteps.length > 0
+      ? bridgeDoctor.nextSteps
+      : bridgeDoctor.status === 'ready'
+        ? ['Ready for agent use.']
+        : bridgeDoctor.status === 'error'
+          ? ['Resolve the blocked Doctor check.']
+          : ['Complete the action-needed Doctor checks.']
+    : ['Run Doctor to check setup.'];
 
   function getPrimaryAgentAction(kind: AgentTargetStatus['kind']) {
     const status = agentStatuses?.find((entry) => entry.kind === kind);
@@ -261,6 +281,54 @@ export default function SettingsModal({
                         </button>
                       </div>
                     </details>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="settings-quiet-row">
+              <div className="settings-quiet-kicker">Bridge Doctor</div>
+              <div className="settings-quiet-body">
+                <div className="settings-quiet-title">
+                  <strong>{bridgeDoctor?.label ?? 'Not checked'}</strong>
+                </div>
+                <p className="settings-quiet-note">
+                  {bridgeDoctor?.summary ?? 'Run Doctor before relying on agent updates.'}
+                </p>
+                <div className="settings-doctor-grid">
+                  <div>
+                    <div className="settings-quiet-kicker">Setup checklist</div>
+                    <ul className="settings-doctor-list">
+                      {bridgeDoctorSteps.map((step) => (
+                        <li key={step}>{step}</li>
+                      ))}
+                    </ul>
+                  </div>
+                  {bridgeDoctor?.checks.length ? (
+                    <div>
+                      <div className="settings-quiet-kicker">Checks</div>
+                      <ul className="settings-doctor-list">
+                        {bridgeDoctor.checks.map((check) => (
+                          <li key={check.id}>
+                            <span className={`settings-doctor-status is-${check.status}`}>
+                              {check.status}
+                            </span>
+                            <span>
+                              <strong>{check.label}</strong>
+                              <span>{check.detail}</span>
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </div>
+                <div className="settings-row-footer">
+                  <div className="settings-row-meta" aria-hidden="true" />
+                  <div className="settings-quiet-actions">
+                    <button type="button" onClick={onRunBridgeDoctor} disabled={bridgeDoctorPending}>
+                      {bridgeDoctorPending ? 'Checking…' : 'Run Doctor'}
+                    </button>
                   </div>
                 </div>
               </div>

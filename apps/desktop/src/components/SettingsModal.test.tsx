@@ -2,10 +2,11 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
 import SettingsModal from './SettingsModal';
+import type { BridgeDoctorReport } from '../lib/types';
 
 describe('SettingsModal', () => {
-  it('renders agent access as a quiet zen list with tucked technical detail', () => {
-    const html = renderToStaticMarkup(
+  function renderSettingsModal(bridgeDoctor: BridgeDoctorReport | null) {
+    return renderToStaticMarkup(
       <SettingsModal
         settingsOpen
         onClose={() => {}}
@@ -26,6 +27,9 @@ describe('SettingsModal', () => {
         bridgeUrl="http://127.0.0.1:4855/mcp"
         maskedToken="abc123••••xyz9"
         bridgeLastError={null}
+        bridgeDoctor={bridgeDoctor}
+        bridgeDoctorPending={false}
+        onRunBridgeDoctor={() => {}}
         onRestartBridge={() => {}}
         onRegenerateBridgeToken={() => {}}
         onCopyBridgeSnippet={() => {}}
@@ -60,9 +64,37 @@ describe('SettingsModal', () => {
         onCopyCliSetup={() => {}}
       />,
     );
+  }
+
+  it('renders agent access as a quiet zen list with tucked technical detail', () => {
+    const html = renderSettingsModal({
+      status: 'action_needed',
+      label: 'Action needed',
+      summary: 'Finish the setup checklist before relying on agent updates.',
+      checks: [
+        {
+          id: 'watched-roots',
+          label: 'Watched roots',
+          status: 'ready',
+          detail: '1 watched root configured.',
+        },
+        {
+          id: 'mcp-tools',
+          label: 'MCP tool call',
+          status: 'action',
+          detail: 'Run after the bridge is enabled and healthy.',
+        },
+      ],
+      nextSteps: ['Enable the Agent Bridge.', 'Install projectctl.'],
+    });
 
     expect(html).toContain('Bridge');
     expect(html).toContain('Agent Defaults');
+    expect(html).toContain('Bridge Doctor');
+    expect(html).toContain('Setup checklist');
+    expect(html).toContain('Run Doctor');
+    expect(html).toContain('Enable the Agent Bridge.');
+    expect(html).toContain('MCP tool call');
     expect(html).toContain('projectctl CLI');
     expect(html).toContain('Reveal paths');
     expect(html).toContain('Utilities');
@@ -84,5 +116,28 @@ describe('SettingsModal', () => {
     expect(html).not.toContain('Setup steps');
     expect(html).not.toContain('>CLI<');
     expect(html).not.toContain('Re-copy setup for: Codex');
+  });
+
+  it('does not show ready setup copy before Doctor has passed', () => {
+    const uncheckedHtml = renderSettingsModal(null);
+    const blockedHtml = renderSettingsModal({
+      status: 'error',
+      label: 'Blocked',
+      summary: 'Fix the failing bridge or agent setup check.',
+      checks: [
+        {
+          id: 'mcp-tools',
+          label: 'MCP tool call',
+          status: 'error',
+          detail: 'Bridge responded, but record_execution is missing.',
+        },
+      ],
+      nextSteps: [],
+    });
+
+    expect(uncheckedHtml).toContain('Run Doctor to check setup.');
+    expect(blockedHtml).toContain('Resolve the blocked Doctor check.');
+    expect(uncheckedHtml).not.toContain('Ready for agent use.');
+    expect(blockedHtml).not.toContain('Ready for agent use.');
   });
 });

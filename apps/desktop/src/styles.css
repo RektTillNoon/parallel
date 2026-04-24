@@ -374,9 +374,35 @@ code {
 }
 
 .empty-state {
+  display: grid;
+  gap: 0.7rem;
+  justify-items: start;
+  max-width: 30rem;
   padding: 2rem 0;
   color: var(--subtle);
   font-size: 0.94rem;
+}
+
+.empty-state h2 {
+  margin: 0;
+  font-size: 1.12rem;
+  font-weight: 650;
+  letter-spacing: 0;
+  color: var(--ink);
+}
+
+.empty-state p {
+  max-width: 34ch;
+  margin: 0;
+  line-height: 1.55;
+}
+
+.empty-state button {
+  min-height: 2.35rem;
+  padding: 0.55rem 0.9rem;
+  border-radius: 999px;
+  font-size: 0.88rem;
+  font-weight: 650;
 }
 
 .error-banner {
@@ -616,7 +642,7 @@ code {
 .focus-feed-entry {
   display: grid;
   grid-template-columns: 2.25rem 9px minmax(0, 1fr);
-  align-items: center;
+  align-items: start;
   column-gap: 0.8rem;
   padding: 0.35rem 0;
   position: relative;
@@ -629,6 +655,7 @@ code {
   text-align: right;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+  padding-top: 0.1rem;
 }
 
 .focus-feed-dot {
@@ -640,6 +667,38 @@ code {
   box-shadow: 0 0 0 1px color-mix(in oklab, oklch(0.68 0.2 calc(var(--entry-hue, 270) * 1deg)) 40%, transparent);
   position: relative;
   z-index: 1;
+  margin-top: 0.35rem;
+}
+
+.focus-feed-body {
+  display: grid;
+  gap: 0.22rem;
+  min-width: 0;
+}
+
+.focus-feed-meta,
+.focus-feed-blockers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.focus-feed-meta span,
+.focus-feed-blockers span {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  line-height: 1.25;
+}
+
+.focus-feed-meta span {
+  color: var(--muted);
+}
+
+.focus-feed-blockers span {
+  color: var(--warn);
 }
 
 .focus-feed-text {
@@ -649,7 +708,7 @@ code {
   max-width: 58ch;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .focus-feed-more {
@@ -905,6 +964,62 @@ code {
 
 .settings-quiet-note code {
   font-size: 0.8rem;
+}
+
+.settings-doctor-grid {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.settings-doctor-list {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0.35rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: color-mix(in oklab, var(--ink) 84%, var(--muted));
+}
+
+.settings-doctor-list li {
+  display: flex;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.settings-doctor-list li > span:last-child {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.settings-doctor-list strong {
+  font-size: 0.84rem;
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.settings-doctor-status {
+  flex: 0 0 auto;
+  min-width: 4.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.settings-doctor-status.is-ready {
+  color: color-mix(in oklab, var(--success) 76%, var(--ink));
+}
+
+.settings-doctor-status.is-action {
+  color: color-mix(in oklab, var(--accent) 78%, var(--ink));
+}
+
+.settings-doctor-status.is-error {
+  color: color-mix(in oklab, var(--danger) 78%, var(--ink));
 }
 
 .settings-row-footer {

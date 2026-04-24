@@ -46,6 +46,7 @@ Useful commands:
 
 ```bash
 pnpm test
+pnpm smoke:bridge
 pnpm dev:desktop
 pnpm build:desktop
 cargo test
@@ -53,6 +54,9 @@ pnpm --filter @parallel/desktop test
 ```
 
 `pnpm test` is the main repo-level verification gate today. It runs the workspace JS tests and the Rust test suites together.
+`pnpm smoke:bridge` builds the local `projectctl` bridge and verifies the authenticated health and MCP `tools/list` surfaces.
+
+The hosted MCP/OAuth direction is tracked in [docs/remote-mcp-oauth-track.md](docs/remote-mcp-oauth-track.md).
 
 The desktop app builds `projectctl` as a bundled sidecar during Tauri dev/build. Local macOS packaging writes bundles to:
 

@@ -1,6 +1,6 @@
 ---
 name: parallel
-description: "Product guidance for using parallel through its local MCP bridge or the projectctl CLI. Use when implementation is starting or resuming and execution state should be tracked through parallel: inspect projects, ensure a session, sync or read the plan, claim steps, log activity, manage blockers, propose decisions, or refresh handoff."
+description: "Product guidance for using parallel through its local MCP bridge or the projectctl CLI. Use when implementation is starting or resuming and execution state should be tracked through parallel: inspect projects, ensure a session, sync or read the plan, claim steps, record execution updates, manage blockers, propose decisions, or read handoff."
 ---
 
 # Parallel
@@ -17,7 +17,7 @@ Use this skill when the user wants an agent to use `parallel` as the product:
 - record notes or activity
 - set or clear blockers
 - propose a decision for human review
-- refresh or read the project handoff
+- read or rebuild the project handoff
 
 Do not use this skill for hacking on the `parallel` codebase itself. This is about operating the product through MCP or `projectctl`.
 
@@ -103,8 +103,8 @@ Follow this sequence unless the task is clearly read-only:
    Use when the repo needs a canonical plan or when the plan should be updated. This is the authoritative ordered plan path.
 5. `start_step`
    Claim the step your session is actively working on.
-6. `append_activity`
-   Log meaningful progress as you work. Use this for progress notes, observations, and execution breadcrumbs.
+6. `record_execution`
+   Record meaningful execution updates as you work. Use this for progress notes with optional step context, blocker add/clear changes, and execution breadcrumbs. Normal mutations refresh handoff automatically.
 7. `set_blocker`
    Add a blocker when progress is gated, or clear one when unblocked.
 8. `complete_step`
@@ -112,7 +112,7 @@ Follow this sequence unless the task is clearly read-only:
 9. `propose_decision`
    Use when a human needs to approve a tradeoff or direction.
 10. `refresh_handoff`
-    Run before handing work off or after significant state changes if you want the latest snapshot.
+    Use only to rebuild a stale or missing handoff snapshot; normal mutations already refresh it.
 
 This is the default execution-time workflow for agents once planning is done.
 
@@ -131,7 +131,7 @@ Before stopping:
 1. Log the most important progress made.
 2. Clear or set blockers so the next state is truthful.
 3. Complete the step if its contract is satisfied.
-4. Refresh handoff so another agent can resume cleanly.
+4. Read the returned handoff if you need to confirm what the next agent will see.
 
 ## MCP Tool Surface
 
@@ -142,6 +142,8 @@ The bridge exposes these product tools:
 - `sync_plan`
 - `ensure_session`
 - `update_runtime`
+- `record_execution`
+- `log_progress`
 - `append_activity`
 - `start_step`
 - `complete_step`
@@ -179,17 +181,17 @@ In normal product usage, the desktop app manages bridge startup and setup snippe
 2. Read before write. Call `get_project` or `projectctl show` before choosing a step or mutating runtime.
 3. Ensure a session before starting or updating work so ownership is legible in the board.
 4. Use `start_step` or `projectctl step start` only for the step you are actively taking ownership of.
-5. Use `append_activity`, `projectctl activity add`, or `projectctl note add` for substantive progress, not noise.
-6. Use `set_blocker` or `projectctl blocker add|clear` when the next action is genuinely blocked or unblocked.
+5. Use `record_execution`, `projectctl activity add`, or `projectctl note add` for substantive progress, not noise.
+6. Prefer `record_execution` when progress and blocker state change together; use `set_blocker` or `projectctl blocker add|clear` for blocker-only changes.
 7. Use `propose_decision` or `projectctl decision propose` instead of silently inventing policy when the user or a human maintainer needs to choose.
-8. Refresh the handoff when leaving the repo in a new state another agent or human should pick up.
+8. Use `refresh_handoff` only to rebuild stale or missing handoff output; mutation tools refresh it automatically.
 
 ## Effective Usage Heuristics
 
 - Use the same surface consistently within one short workflow. If you started through MCP, prefer staying on MCP unless shell execution makes CLI clearly better.
 - Give sessions concrete titles tied to the actual task, such as `Implement session board selection` or `Investigate bridge startup failure`.
 - Use `start_step` only when the step is now your active execution focus. Do not claim a step just because you inspected it.
-- If you are exploring or debugging without clear ownership yet, ensure the session and append activity first. Claim the step when execution truly starts.
+- If you are exploring or debugging without clear ownership yet, ensure the session and record execution progress first. Claim the step when execution truly starts.
 - Activity entries should capture meaningful state transitions, evidence, or results. Good examples: test results, reproduction confirmed, migration synced, blocker cleared, handoff updated.
 - Activity and note summaries must be one line, sentence-style, and 140 characters or fewer.
 - Notes should be sparse and high signal. Prefer one clear note over a stream of tiny narration.
@@ -249,8 +251,8 @@ Avoid logging:
 ## Recommended Behavior Patterns
 
 - To start implementing an approved plan: inspect the repo in `parallel`, ensure or resume the session, confirm the current step, then claim the step before doing meaningful execution work
-- To resume work over MCP: `get_project` -> `ensure_session` -> `start_step` -> work -> `append_activity` -> `complete_step` -> `refresh_handoff`
-- To resume work over CLI: `projectctl show` -> `projectctl session ensure` -> `projectctl step start` -> work -> `projectctl activity add` or `projectctl note add` -> `projectctl step done` -> `projectctl handoff refresh`
+- To resume work over MCP: `get_project` -> `ensure_session` -> `start_step` -> work -> `record_execution` -> `complete_step`
+- To resume work over CLI: `projectctl show` -> `projectctl session ensure` -> `projectctl step start` -> work -> `projectctl activity add` or `projectctl note add` -> `projectctl step done`
 - To diagnose a blocked repo: inspect blockers, proposals, handoff, and recent activity, then clear the blocker or propose a decision through the same surface you are already using
 - To establish order in an unstructured repo: ensure a session, sync the canonical plan, inspect the resulting state, then claim the first real step
 

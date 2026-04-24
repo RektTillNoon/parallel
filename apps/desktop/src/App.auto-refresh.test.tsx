@@ -13,6 +13,7 @@ const apiMocks = vi.hoisted(() => ({
   applyAgentDefaults: vi.fn(),
   getAgentDefaultsStatus: vi.fn(),
   getBridgeClientSnippets: vi.fn(),
+  getBridgeDoctor: vi.fn(),
   getBridgeStatus: vi.fn(),
   getCliInstallStatus: vi.fn(),
   initProject: vi.fn(),
@@ -265,6 +266,13 @@ describe('App auto refresh', () => {
     apiMocks.loadState.mockResolvedValue(buildLoadState());
     apiMocks.refreshProjects.mockResolvedValue(buildLoadState());
     apiMocks.getBridgeStatus.mockResolvedValue(null);
+    apiMocks.getBridgeDoctor.mockResolvedValue({
+      status: 'ready',
+      label: 'Ready',
+      summary: 'Bridge and agent defaults are ready for local agents.',
+      checks: [],
+      nextSteps: [],
+    });
     apiMocks.getCliInstallStatus.mockResolvedValue(null);
     apiMocks.getAgentDefaultsStatus.mockResolvedValue([]);
     apiMocks.setBridgeEnabled.mockResolvedValue(buildLoadState());
@@ -322,7 +330,7 @@ describe('App auto refresh', () => {
       .mockImplementationOnce(() => nextLoad.promise);
 
     await renderApp();
-    expect(container.textContent).toContain('Recent activity');
+    expect(container.textContent).toContain('Execution timeline');
 
     await advance(15100);
 
@@ -333,7 +341,7 @@ describe('App auto refresh', () => {
     nextLoad.reject(new Error('background load failed'));
     await flush();
 
-    expect(container.textContent).toContain('Recent activity');
+    expect(container.textContent).toContain('Execution timeline');
     expect(container.querySelector('.error-banner')).toBeNull();
   });
 
@@ -412,7 +420,7 @@ describe('App auto refresh', () => {
 
     const refreshedProjectButton = findButton(container, 'parallel');
     expect(refreshedProjectButton?.getAttribute('aria-pressed')).toBe('true');
-    expect(container.textContent).toContain('Recent activity');
+    expect(container.textContent).toContain('Execution timeline');
   });
 
   it('loads agent defaults as global status even when a project is selected', async () => {
@@ -428,6 +436,36 @@ describe('App auto refresh', () => {
     await flush();
 
     expect(apiMocks.getAgentDefaultsStatus).toHaveBeenCalledWith();
+    expect(apiMocks.getBridgeDoctor).toHaveBeenCalledWith();
+  });
+
+  it('keeps setup status visible when Bridge Doctor fails', async () => {
+    apiMocks.getBridgeDoctor.mockRejectedValue(new Error('doctor probe failed'));
+    apiMocks.getAgentDefaultsStatus.mockResolvedValue([
+      {
+        kind: 'codex',
+        label: 'Codex',
+        status: 'missing',
+        reasons: [],
+        global: null,
+        repo: null,
+        changedPaths: [],
+      },
+    ]);
+
+    await renderApp();
+
+    const settingsButton = findButton(container, 'Settings');
+    expect(settingsButton).not.toBeNull();
+
+    await act(async () => {
+      settingsButton?.click();
+      await vi.dynamicImportSettled();
+    });
+    await flush();
+
+    expect(container.textContent).toContain('Managed defaults keep this agent aligned');
+    expect(container.textContent).toContain('doctor probe failed');
   });
 
   it('applies agent defaults globally from settings instead of scoping them to the selected repo', async () => {

@@ -350,6 +350,24 @@ pub struct AppendActivityInput {
 }
 
 #[derive(Debug, Clone)]
+pub struct RecordExecutionInput {
+    pub root: String,
+    pub actor: String,
+    pub source: ActivitySource,
+    pub session_id: Option<String>,
+    pub session_title: Option<String>,
+    pub branch: Option<String>,
+    pub summary: String,
+    pub payload: Option<Value>,
+    pub step_id: Option<String>,
+    pub subtask_id: Option<String>,
+    pub blocker: Option<String>,
+    pub clear_blocker: Option<String>,
+    pub clear_all_blockers: bool,
+    pub index_db_path: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct PlanSyncSubtaskInput {
     pub id: Option<String>,
     pub title: String,

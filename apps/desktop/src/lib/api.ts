@@ -4,6 +4,7 @@ import type {
   AgentInstallAction,
   AgentTargetStatus,
   BridgeSnippet,
+  BridgeDoctorReport,
   CliInstallStatus,
   LoadStatePayload,
   ProjectDetail,
@@ -97,6 +98,10 @@ export async function getBridgeStatus() {
     mcp: LoadStatePayload['settings']['mcp'];
     mcpRuntime: LoadStatePayload['mcpRuntime'];
   }>('get_bridge_status');
+}
+
+export async function getBridgeDoctor() {
+  return invokeJson<BridgeDoctorReport>('get_bridge_doctor');
 }
 
 export async function regenerateBridgeToken() {

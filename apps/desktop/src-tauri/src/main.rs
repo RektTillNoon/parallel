@@ -84,6 +84,41 @@ struct CliInstallStatus {
     persist_command: String,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum DoctorCheckStatus {
+    Ready,
+    Action,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct BridgeDoctorCheck {
+    id: String,
+    label: String,
+    status: DoctorCheckStatus,
+    detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum BridgeDoctorStatus {
+    Ready,
+    ActionNeeded,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct BridgeDoctorReport {
+    status: BridgeDoctorStatus,
+    label: String,
+    summary: String,
+    checks: Vec<BridgeDoctorCheck>,
+    next_steps: Vec<String>,
+}
+
 #[derive(Clone)]
 struct TrayMenuHandles {
     project: MenuItem<tauri::Wry>,
@@ -576,6 +611,44 @@ fn probe_bridge_health(port: u16, token: &str, timeout_ms: u64) -> Result<(), St
         )),
         Err(error) => Err(error.to_string()),
     }
+}
+
+fn probe_bridge_tools(port: u16, token: &str, timeout_ms: u64) -> Result<Vec<String>, String> {
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_millis(timeout_ms))
+        .timeout(Duration::from_millis(timeout_ms))
+        .no_proxy()
+        .build()
+        .map_err(|error| error.to_string())?;
+    let url = resolve_bridge_url(port);
+    let response = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": {}
+        }))
+        .send()
+        .map_err(|error| error.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("MCP tools/list returned {}", response.status()));
+    }
+    let payload: serde_json::Value = response.json().map_err(|error| error.to_string())?;
+    payload
+        .get("result")
+        .and_then(|result| result.get("tools"))
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "MCP tools/list response did not contain tools.".to_string())?
+        .iter()
+        .map(|tool| {
+            tool.get("name")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+                .ok_or_else(|| "MCP tool entry did not contain a name.".to_string())
+        })
+        .collect()
 }
 
 fn wait_for_bridge_health(
@@ -1407,6 +1480,32 @@ fn get_bridge_status(state: State<AppState>) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn get_bridge_doctor(state: State<AppState>) -> Result<String, String> {
+    let _ = reconcile_bridge_runtime_if_healthy(&state);
+    let settings = ensure_settings(&state)?;
+    let runtime = state
+        .bridge
+        .lock()
+        .map_err(|_| "bridge mutex poisoned".to_string())?
+        .runtime
+        .clone();
+    let cli = cli_install_status()?;
+    let agents = inspect_all_agent_defaults(&state, None)?;
+    let tools = if settings.mcp.enabled && runtime.status == "running" {
+        probe_bridge_tools(
+            runtime.bound_port.unwrap_or(settings.mcp.port),
+            &settings.mcp.token,
+            750,
+        )
+    } else {
+        Err("Bridge is not running.".to_string())
+    };
+    to_json_string(&build_bridge_doctor_report(
+        &settings, &runtime, &cli, &agents, tools,
+    ))
+}
+
+#[tauri::command]
 fn regenerate_bridge_token(app: AppHandle, state: State<AppState>) -> Result<String, String> {
     let mut settings = ensure_settings(&state)?;
     settings.mcp.token = generate_token();
@@ -1502,6 +1601,201 @@ fn inspect_all_agent_defaults(
         .into_iter()
         .map(|kind| inspect_agent_defaults(&context, kind, scope))
         .collect()
+}
+
+fn doctor_check(
+    id: &str,
+    label: &str,
+    status: DoctorCheckStatus,
+    detail: impl Into<String>,
+) -> BridgeDoctorCheck {
+    BridgeDoctorCheck {
+        id: id.to_string(),
+        label: label.to_string(),
+        status,
+        detail: detail.into(),
+    }
+}
+
+fn build_bridge_doctor_report(
+    settings: &Settings,
+    runtime: &BridgeRuntimeSnapshot,
+    cli: &CliInstallStatus,
+    agents: &[AgentTargetStatus],
+    mcp_tools: Result<Vec<String>, String>,
+) -> BridgeDoctorReport {
+    let mut checks = Vec::new();
+    let mut next_steps = Vec::new();
+
+    if settings.watched_roots.is_empty() {
+        checks.push(doctor_check(
+            "watched-roots",
+            "Watched roots",
+            DoctorCheckStatus::Action,
+            "No watched roots are configured.",
+        ));
+        next_steps.push("Add a watched root.".to_string());
+    } else {
+        checks.push(doctor_check(
+            "watched-roots",
+            "Watched roots",
+            DoctorCheckStatus::Ready,
+            format!("{} watched root(s) configured.", settings.watched_roots.len()),
+        ));
+    }
+
+    if !settings.mcp.enabled {
+        checks.push(doctor_check(
+            "bridge-runtime",
+            "Agent Bridge",
+            DoctorCheckStatus::Action,
+            "The local MCP bridge is disabled.",
+        ));
+        next_steps.push("Enable the Agent Bridge.".to_string());
+    } else if runtime.status == "running" {
+        checks.push(doctor_check(
+            "bridge-runtime",
+            "Agent Bridge",
+            DoctorCheckStatus::Ready,
+            format!(
+                "Running on {}.",
+                resolve_bridge_url(runtime.bound_port.unwrap_or(settings.mcp.port))
+            ),
+        ));
+    } else if runtime.status == "error" {
+        checks.push(doctor_check(
+            "bridge-runtime",
+            "Agent Bridge",
+            DoctorCheckStatus::Error,
+            runtime
+                .last_error
+                .clone()
+                .unwrap_or_else(|| "The bridge failed to start.".to_string()),
+        ));
+    } else {
+        checks.push(doctor_check(
+            "bridge-runtime",
+            "Agent Bridge",
+            DoctorCheckStatus::Action,
+            "The bridge is enabled but is not accepting requests yet.",
+        ));
+        next_steps.push("Restart the Agent Bridge.".to_string());
+    }
+
+    match mcp_tools {
+        Ok(tools) if tools.iter().any(|tool| tool == "record_execution") => checks.push(
+            doctor_check(
+                "mcp-tools",
+                "MCP tool call",
+                DoctorCheckStatus::Ready,
+                "Bridge returned the expected execution tool surface.",
+            ),
+        ),
+        Ok(_) => checks.push(doctor_check(
+            "mcp-tools",
+            "MCP tool call",
+            DoctorCheckStatus::Error,
+            "Bridge responded, but record_execution is missing.",
+        )),
+        Err(error) if settings.mcp.enabled && runtime.status == "running" => checks.push(
+            doctor_check("mcp-tools", "MCP tool call", DoctorCheckStatus::Error, error),
+        ),
+        Err(_) => checks.push(doctor_check(
+            "mcp-tools",
+            "MCP tool call",
+            DoctorCheckStatus::Action,
+            "Run after the bridge is enabled and healthy.",
+        )),
+    }
+
+    if cli.installed && (cli.install_dir_on_path || cli.shell_profile_configured) {
+        checks.push(doctor_check(
+            "projectctl",
+            "projectctl",
+            DoctorCheckStatus::Ready,
+            "CLI is installed on a stable path.",
+        ));
+    } else if cli.installed {
+        checks.push(doctor_check(
+            "projectctl",
+            "projectctl",
+            DoctorCheckStatus::Action,
+            "CLI is installed, but your shell path still needs setup.",
+        ));
+        next_steps.push("Copy the projectctl shell setup command.".to_string());
+    } else {
+        checks.push(doctor_check(
+            "projectctl",
+            "projectctl",
+            DoctorCheckStatus::Action,
+            "CLI is not installed on the stable path.",
+        ));
+        next_steps.push("Install projectctl.".to_string());
+    }
+
+    if agents.is_empty() || agents.iter().any(|agent| agent.status == InstallStatus::Missing) {
+        checks.push(doctor_check(
+            "agent-defaults",
+            "Agent defaults",
+            DoctorCheckStatus::Action,
+            "One or more agent defaults are missing.",
+        ));
+        next_steps.push("Install or update agent defaults.".to_string());
+    } else if agents.iter().any(|agent| agent.status == InstallStatus::Error) {
+        checks.push(doctor_check(
+            "agent-defaults",
+            "Agent defaults",
+            DoctorCheckStatus::Error,
+            "One or more agent defaults are blocked.",
+        ));
+    } else if agents.iter().any(|agent| agent.status == InstallStatus::Stale) {
+        checks.push(doctor_check(
+            "agent-defaults",
+            "Agent defaults",
+            DoctorCheckStatus::Action,
+            "One or more agent defaults need an update.",
+        ));
+        next_steps.push("Install or update agent defaults.".to_string());
+    } else {
+        checks.push(doctor_check(
+            "agent-defaults",
+            "Agent defaults",
+            DoctorCheckStatus::Ready,
+            "Managed agent defaults are installed.",
+        ));
+    }
+
+    next_steps.dedup();
+
+    let status = if checks.iter().any(|check| check.status == DoctorCheckStatus::Error) {
+        BridgeDoctorStatus::Error
+    } else if checks.iter().any(|check| check.status == DoctorCheckStatus::Action) {
+        BridgeDoctorStatus::ActionNeeded
+    } else {
+        BridgeDoctorStatus::Ready
+    };
+    let (label, summary) = match status {
+        BridgeDoctorStatus::Ready => (
+            "Ready".to_string(),
+            "Agents can use Parallel through the local bridge.".to_string(),
+        ),
+        BridgeDoctorStatus::ActionNeeded => (
+            "Action needed".to_string(),
+            "Finish the setup checklist before relying on agent updates.".to_string(),
+        ),
+        BridgeDoctorStatus::Error => (
+            "Blocked".to_string(),
+            "Fix the failing bridge or agent setup check.".to_string(),
+        ),
+    };
+
+    BridgeDoctorReport {
+        status,
+        label,
+        summary,
+        checks,
+        next_steps,
+    }
 }
 
 #[tauri::command]
@@ -1695,6 +1989,7 @@ fn main() {
             set_bridge_enabled,
             restart_bridge_cmd,
             get_bridge_status,
+            get_bridge_doctor,
             regenerate_bridge_token,
             get_bridge_client_snippets,
             get_agent_defaults_status,
@@ -1999,6 +2294,112 @@ mod tests {
 
         assert!(install.exists());
         assert!(cli_install_matches(&install, &bundled));
+    }
+
+    #[test]
+    fn bridge_doctor_reports_ready_when_bridge_setup_and_agents_are_valid() {
+        let settings = Settings {
+            watched_roots: vec!["/Users/light/Projects".to_string()],
+            last_focused_project: None,
+            mcp: BridgeSettings {
+                enabled: true,
+                port: DEFAULT_BRIDGE_PORT,
+                token: "token".to_string(),
+            },
+        };
+        let runtime = BridgeRuntimeSnapshot {
+            status: "running".to_string(),
+            bound_port: Some(DEFAULT_BRIDGE_PORT),
+            ..BridgeRuntimeSnapshot::default()
+        };
+        let cli = CliInstallStatus {
+            bundled_path: "/app/projectctl".to_string(),
+            install_path: "/Users/light/bin/projectctl".to_string(),
+            installed: true,
+            install_dir_on_path: true,
+            shell_profile_configured: false,
+            shell_export: "export PATH=\"$HOME/bin:$PATH\"".to_string(),
+            shell_profile: "/Users/light/.zshrc".to_string(),
+            persist_command: "echo setup".to_string(),
+        };
+        let agents = ClientKind::ALL
+            .into_iter()
+            .map(|kind| AgentTargetStatus {
+                kind: kind.as_str().to_string(),
+                label: kind.label().to_string(),
+                status: InstallStatus::Installed,
+                reasons: Vec::new(),
+                global: None,
+                repo: None,
+                changed_paths: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+
+        let report = build_bridge_doctor_report(
+            &settings,
+            &runtime,
+            &cli,
+            &agents,
+            Ok(vec![
+                "list_projects".to_string(),
+                "get_project".to_string(),
+                "record_execution".to_string(),
+            ]),
+        );
+
+        assert_eq!(report.status, BridgeDoctorStatus::Ready);
+        assert!(report.next_steps.is_empty());
+        assert!(report
+            .checks
+            .iter()
+            .any(|check| check.id == "mcp-tools" && check.status == DoctorCheckStatus::Ready));
+    }
+
+    #[test]
+    fn bridge_doctor_reports_ordered_actions_for_missing_setup() {
+        let settings = Settings {
+            watched_roots: Vec::new(),
+            last_focused_project: None,
+            mcp: BridgeSettings {
+                enabled: false,
+                port: DEFAULT_BRIDGE_PORT,
+                token: String::new(),
+            },
+        };
+        let runtime = BridgeRuntimeSnapshot::default();
+        let cli = CliInstallStatus {
+            bundled_path: "/app/projectctl".to_string(),
+            install_path: "/Users/light/bin/projectctl".to_string(),
+            installed: false,
+            install_dir_on_path: false,
+            shell_profile_configured: false,
+            shell_export: "export PATH=\"$HOME/bin:$PATH\"".to_string(),
+            shell_profile: "/Users/light/.zshrc".to_string(),
+            persist_command: "echo setup".to_string(),
+        };
+        let agents = vec![AgentTargetStatus {
+            kind: "codex".to_string(),
+            label: "Codex".to_string(),
+            status: InstallStatus::Missing,
+            reasons: Vec::new(),
+            global: None,
+            repo: None,
+            changed_paths: Vec::new(),
+        }];
+
+        let report =
+            build_bridge_doctor_report(&settings, &runtime, &cli, &agents, Err("off".to_string()));
+
+        assert_eq!(report.status, BridgeDoctorStatus::ActionNeeded);
+        assert_eq!(
+            report.next_steps,
+            vec![
+                "Add a watched root.",
+                "Enable the Agent Bridge.",
+                "Install projectctl.",
+                "Install or update agent defaults.",
+            ]
+        );
     }
 
     #[test]
