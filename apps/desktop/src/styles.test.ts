@@ -112,6 +112,52 @@ describe('single-focus design system', () => {
     expect(styles).not.toMatch(/\.stage-head\b/);
   });
 
+  it('keeps the menu bar popover bounded with a single scrollable body', () => {
+    expect(styles).toMatch(/\.menubar-popover\s*{[\s\S]*grid-template-rows:\s*auto\s+auto\s+auto\s+minmax\(0,\s*1fr\)\s+auto;/s);
+    expect(styles).toMatch(/\.menubar-popover\s*{[\s\S]*gap:\s*0\.9rem;/s);
+    expect(styles).toMatch(/\.menubar-popover\s*{[\s\S]*padding:\s*1rem;/s);
+    expect(styles).toMatch(/\.menubar-popover\s*{[\s\S]*overflow:\s*hidden;/s);
+    expect(styles).toMatch(/\.menubar-scroll\s*{[\s\S]*gap:\s*1rem;/s);
+    expect(styles).toMatch(/\.menubar-scroll\s*{[\s\S]*overflow-y:\s*auto;/s);
+    expect(styles).toMatch(/\.menubar-scroll\s*{[\s\S]*padding-right:\s*0;/s);
+    expect(styles).toMatch(/\.menubar-scroll\s*{[^}]*scrollbar-gutter:\s*auto;/s);
+    expect(styles).not.toMatch(/\.menubar-scroll\s*{[^}]*scrollbar-gutter:\s*stable;/s);
+    expect(styles).toMatch(/\.menubar-foot\s*{[\s\S]*grid-template-columns:\s*auto;/s);
+    expect(styles).toMatch(/\.menubar-foot\s*{[\s\S]*justify-content:\s*center;/s);
+    expect(styles).toMatch(/\.menubar-foot\s*{[\s\S]*border-top:\s*1px solid color-mix/s);
+    expect(styles).toMatch(/\.menubar-foot button\s*{[\s\S]*min-width:\s*14rem;/s);
+    expect(styles).toMatch(/\.menubar-foot button\s*{[\s\S]*width:\s*min\(18rem,\s*100%\);/s);
+  });
+
+  it('renders the menu bar project carousel as connected status dots above the dashboard focus view', () => {
+    expect(styles).toMatch(/\.menubar-global-status\s*{[\s\S]*margin-top:\s*0\.72rem;/s);
+    expect(styles).toMatch(/\.menubar-global-status\s*{[\s\S]*font-size:\s*0\.68rem;/s);
+    expect(styles).toMatch(/\.menubar-global-status\s*{[\s\S]*color:\s*var\(--muted\);/s);
+    expect(styles).toMatch(/\.menubar-project-rail\s*{[\s\S]*grid-template-columns:\s*auto\s+minmax\(0,\s*1fr\)\s+auto;/s);
+    expect(styles).toMatch(/\.menubar-project-dots\s*{[\s\S]*display:\s*inline-flex;/s);
+    expect(styles).toMatch(/\.menubar-project-dots::before\s*{[\s\S]*height:\s*1px;/s);
+    expect(styles).toMatch(/\.menubar-project-dot\s*{[\s\S]*border-radius:\s*999px;/s);
+    expect(styles).toMatch(/\.menubar-project-dot\.is-selected\s*{[^}]*transform:\s*scale\(1\.32\);/s);
+    expect(styles).not.toMatch(/\.menubar-project-dot\.is-selected\s*{[^}]*box-shadow:[^}]*var\(--accent\)/s);
+    expect(styles).not.toMatch(/\.menubar-project-dot\.is-selected\s*{[^}]*background:\s*var\(--accent\);/s);
+    expect(styles).toMatch(/\.menubar-project-identity\s*{[\s\S]*border:\s*1px solid var\(--line\);/s);
+    expect(styles).toMatch(/\.menubar-project-name\s*{[\s\S]*font-size:\s*1\.08rem;/s);
+    expect(styles).toMatch(/\.menubar-project-state\s*{[\s\S]*display:\s*inline-flex;/s);
+    expect(styles).toMatch(/\.menubar-project-meta-row\s*{[\s\S]*display:\s*flex;/s);
+    expect(styles).toMatch(/\.menubar-next-action\s*{[\s\S]*grid-template-columns:\s*auto\s+minmax\(0,\s*1fr\);/s);
+    expect(styles).toMatch(/\.menubar-next-action p\s*{[\s\S]*text-overflow:\s*ellipsis;/s);
+    expect(styles).toMatch(/\.menubar-dashboard\s*{[\s\S]*width:\s*100%;/s);
+    expect(styles).toMatch(/\.menubar-dashboard\s+\.focus\s*{[\s\S]*gap:\s*0\.92rem;/s);
+    expect(styles).toMatch(/\.menubar-dashboard\s+\.focus-context\s*{[^}]*display:\s*none;/s);
+    expect(styles).toMatch(/\.menubar-dashboard\s+\.focus-when\s*{[\s\S]*font-size:\s*1\.55rem;/s);
+    expect(styles).toMatch(/\.menubar-dashboard\s+\.focus-step,\s*\.menubar-dashboard\s+\.focus-feed\s*{[\s\S]*padding:\s*0\.9rem\s+1rem\s+0\.95rem;/s);
+    expect(styles).toMatch(/\.menubar-dashboard\s+\.focus-feed-meta\s*{[\s\S]*display:\s*none;/s);
+    expect(styles).toMatch(/\.menubar-dashboard\s+\.focus-feed-entry\s*{[\s\S]*grid-template-columns:\s*3\.7rem\s+9px\s+minmax\(0,\s*1fr\);/s);
+    expect(styles).toMatch(/\.menubar-dashboard\s+\.focus-feed-entry\s*{[\s\S]*column-gap:\s*0\.85rem;/s);
+    expect(styles).toMatch(/\.menubar-dashboard\s+\.focus-feed-list::before\s*{[\s\S]*left:\s*calc\(3\.7rem\s*\+\s*4px\);/s);
+    expect(styles).toMatch(/\.menubar-dashboard\s+\.focus-foot\s*{[^}]*display:\s*none;/s);
+  });
+
   it('lights the switcher items with a tiny status dot and selection wash', () => {
     expect(styles).toMatch(/\.switcher-dot\s*{[^}]*border-radius:\s*999px;/s);
     expect(styles).toMatch(/\.switcher-dot\s*{[\s\S]*background:\s*var\(--warn\);/s);

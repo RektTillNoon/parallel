@@ -14,4 +14,51 @@ describe('desktop tauri script', () => {
       'CARGO_TARGET_DIR=../../target',
     );
   });
+
+  it('starts the dashboard window hidden so the tray is the cold-start surface', () => {
+    const tauriConfig = JSON.parse(
+      readFileSync(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8'),
+    ) as {
+      app?: {
+        windows?: Array<{ label?: string; visible?: boolean }>;
+      };
+    };
+
+    const mainWindow = tauriConfig.app?.windows?.find(
+      (window) => window.label === 'main',
+    );
+
+    expect(mainWindow?.visible).toBe(false);
+  });
+
+  it('defines a hidden frameless menu bar popover window', () => {
+    const tauriConfig = JSON.parse(
+      readFileSync(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8'),
+    ) as {
+      app?: {
+        windows?: Array<{
+          label?: string;
+          url?: string;
+          visible?: boolean;
+          decorations?: boolean;
+          resizable?: boolean;
+          skipTaskbar?: boolean;
+          alwaysOnTop?: boolean;
+        }>;
+      };
+    };
+
+    const popoverWindow = tauriConfig.app?.windows?.find(
+      (window) => window.label === 'menubar',
+    );
+
+    expect(popoverWindow).toMatchObject({
+      url: '/?surface=menubar',
+      visible: false,
+      decorations: false,
+      resizable: false,
+      skipTaskbar: true,
+      alwaysOnTop: true,
+    });
+  });
 });

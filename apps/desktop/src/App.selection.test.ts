@@ -2,9 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildEmptyState,
+  buildMenubarStats,
   buildVisibleProjects,
+  chooseAdjacentMenubarProjectRoot,
+  chooseMenubarProject,
   choosePrimaryBoardRow,
   emptySelectionMessage,
+  resolveMenubarProjectKeyDirection,
+  resolveDesktopSurface,
   noProjectsInRootsMessage,
   projectInitPrompt,
   resolveSelectedSessionId,
@@ -115,7 +120,167 @@ describe('app copy', () => {
   });
 });
 
+describe('desktop surface routing', () => {
+  it('uses the menu bar surface only for the explicit surface query', () => {
+    expect(resolveDesktopSurface('?surface=menubar')).toBe('menubar');
+    expect(resolveDesktopSurface('?surface=dashboard')).toBe('dashboard');
+    expect(resolveDesktopSurface('')).toBe('dashboard');
+  });
+
+  it('builds compact menu bar stats from the board rows', () => {
+    expect(buildMenubarStats(board)).toEqual({
+      activeCount: 2,
+      blockedCount: 0,
+      unclaimedCount: 0,
+    });
+  });
+
+  it('chooses a stable menu bar project from the selected root or first project', () => {
+    const projects = [
+      {
+        root: '/Users/light/Projects/parallel',
+        name: 'parallel',
+      },
+      {
+        root: '/Users/light/Projects/baryon',
+        name: 'baryon',
+      },
+    ];
+
+    expect(chooseMenubarProject(projects, '/Users/light/Projects/baryon')?.name).toBe('baryon');
+    expect(chooseMenubarProject(projects, '/Users/light/Projects/missing')?.name).toBe('parallel');
+    expect(chooseMenubarProject([], '/Users/light/Projects/baryon')).toBeNull();
+  });
+
+  it('cycles menu bar projects in both directions with wraparound', () => {
+    const projects = [
+      { root: '/Users/light/Projects/parallel', name: 'parallel' },
+      { root: '/Users/light/Projects/baryon', name: 'baryon' },
+      { root: '/Users/light/Projects/trading', name: 'trading' },
+    ];
+
+    expect(chooseAdjacentMenubarProjectRoot(projects, '/Users/light/Projects/parallel', 1)).toBe(
+      '/Users/light/Projects/baryon',
+    );
+    expect(chooseAdjacentMenubarProjectRoot(projects, '/Users/light/Projects/parallel', -1)).toBe(
+      '/Users/light/Projects/trading',
+    );
+    expect(chooseAdjacentMenubarProjectRoot(projects, '/Users/light/Projects/missing', 1)).toBe(
+      '/Users/light/Projects/baryon',
+    );
+    expect(chooseAdjacentMenubarProjectRoot([], '/Users/light/Projects/parallel', 1)).toBeNull();
+  });
+
+  it('maps menu bar arrow keys to project cycling directions', () => {
+    expect(resolveMenubarProjectKeyDirection('ArrowLeft')).toBe(-1);
+    expect(resolveMenubarProjectKeyDirection('ArrowRight')).toBe(1);
+    expect(resolveMenubarProjectKeyDirection('ArrowUp')).toBeNull();
+    expect(resolveMenubarProjectKeyDirection('Enter')).toBeNull();
+  });
+});
+
 describe('buildVisibleProjects', () => {
+  it('orders visible projects by last touched time from newest to oldest', () => {
+    const state: LoadStatePayload = {
+      settings: {
+        watchedRoots: ['/Users/light/Projects'],
+        lastFocusedProject: null,
+        mcp: { enabled: false, port: 4855, token: '' },
+      },
+      projects: [
+        {
+          id: 'stale-1',
+          name: 'stale',
+          root: '/Users/light/Projects/stale',
+          kind: 'software',
+          owner: 'desktop-user',
+          tags: [],
+          initialized: true,
+          status: 'in_progress',
+          stale: false,
+          missing: false,
+          currentStepId: null,
+          currentStepTitle: null,
+          blockerCount: 0,
+          totalStepCount: 0,
+          completedStepCount: 0,
+          activeSessionCount: 0,
+          focusSessionId: null,
+          lastUpdatedAt: '2026-04-16T19:00:00.000Z',
+          nextAction: null,
+          activeBranch: 'main',
+          pendingProposalCount: 0,
+          discoverySource: 'parallel',
+          discoveryPath: null,
+        },
+        {
+          id: 'fresh-1',
+          name: 'fresh',
+          root: '/Users/light/Projects/fresh',
+          kind: 'software',
+          owner: 'desktop-user',
+          tags: [],
+          initialized: true,
+          status: 'in_progress',
+          stale: false,
+          missing: false,
+          currentStepId: null,
+          currentStepTitle: null,
+          blockerCount: 0,
+          totalStepCount: 0,
+          completedStepCount: 0,
+          activeSessionCount: 0,
+          focusSessionId: null,
+          lastUpdatedAt: '2026-04-16T19:58:00.000Z',
+          nextAction: null,
+          activeBranch: 'main',
+          pendingProposalCount: 0,
+          discoverySource: 'parallel',
+          discoveryPath: null,
+        },
+        {
+          id: 'untouched-1',
+          name: 'untouched',
+          root: '/Users/light/Projects/untouched',
+          kind: 'software',
+          owner: 'desktop-user',
+          tags: [],
+          initialized: false,
+          status: 'uninitialized',
+          stale: false,
+          missing: false,
+          currentStepId: null,
+          currentStepTitle: null,
+          blockerCount: 0,
+          totalStepCount: 0,
+          completedStepCount: 0,
+          activeSessionCount: 0,
+          focusSessionId: null,
+          lastUpdatedAt: null,
+          nextAction: null,
+          activeBranch: null,
+          pendingProposalCount: 0,
+          discoverySource: 'filesystem',
+          discoveryPath: null,
+        },
+      ],
+      boardProjects: [],
+      mcpRuntime: {
+        status: 'stopped',
+        boundPort: null,
+        pid: null,
+        startedAt: null,
+        lastError: null,
+      },
+    };
+
+    expect(buildVisibleProjects(state).map((project) => project.name)).toEqual([
+      'fresh',
+      'stale',
+      'untouched',
+    ]);
+  });
+
   it('keeps ensure_session resumable and flips to live when the current step is claimed', () => {
     const resumableState: LoadStatePayload = {
       settings: {

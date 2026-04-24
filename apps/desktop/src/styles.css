@@ -170,6 +170,416 @@ code {
   min-height: 100vh;
 }
 
+.menubar-popover {
+  min-height: 100vh;
+  max-height: 100vh;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  gap: 0.9rem;
+  padding: 1rem;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--surface) 72%, black), var(--bg)),
+    var(--bg);
+  border: 1px solid color-mix(in oklab, var(--line-strong) 76%, transparent);
+}
+
+.menubar-popover:focus {
+  outline: none;
+}
+
+.menubar-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.menubar-kicker {
+  font-family: var(--font-display);
+  font-size: 1.28rem;
+  line-height: 0.9;
+  letter-spacing: 0;
+  color: var(--ink);
+}
+
+.menubar-global-status {
+  margin-top: 0.72rem;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.menubar-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.menubar-actions button {
+  width: 1.85rem;
+  height: 1.85rem;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--surface) 84%, transparent);
+}
+
+.menubar-project-rail {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.34rem;
+  min-width: 0;
+}
+
+.menubar-rail-button {
+  width: 1.58rem;
+  height: 1.58rem;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 999px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.menubar-project-track {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 1.58rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.menubar-project-track::-webkit-scrollbar {
+  display: none;
+}
+
+.menubar-project-dots {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.72rem;
+  min-width: max-content;
+  padding: 0.18rem 0.42rem;
+}
+
+.menubar-project-dots::before {
+  content: "";
+  position: absolute;
+  left: 0.76rem;
+  right: 0.76rem;
+  top: 50%;
+  height: 1px;
+  background: color-mix(in oklab, var(--line-strong) 52%, transparent);
+}
+
+.menubar-project-dot {
+  position: relative;
+  z-index: 1;
+  width: 0.58rem;
+  height: 0.58rem;
+  min-width: 0.58rem;
+  padding: 0;
+  border-radius: 999px;
+  border-color: var(--line-strong);
+  background: var(--warn);
+  box-shadow: 0 0 0 3px var(--bg);
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
+}
+
+.menubar-project-dot[data-status="live"] {
+  background: var(--good);
+}
+
+.menubar-project-dot[data-status="blocked"],
+.menubar-project-dot[data-status="uninitialized"] {
+  background: var(--danger);
+}
+
+.menubar-project-dot[data-status="done"] {
+  background: var(--line-strong);
+}
+
+.menubar-project-dot.is-selected {
+  transform: scale(1.32);
+  border-color: color-mix(in oklab, var(--accent) 82%, white);
+  box-shadow: 0 0 0 3px var(--bg);
+}
+
+.menubar-project-identity {
+  display: grid;
+  gap: 0.44rem;
+  padding: 0.72rem 0.82rem 0.78rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--surface) 62%, transparent);
+}
+
+.menubar-project-identity-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.menubar-project-title-block {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+}
+
+.menubar-project-label,
+.menubar-project-branch,
+.menubar-project-state {
+  font-family: var(--font-mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.menubar-project-label {
+  font-size: 0.6rem;
+  color: var(--subtle);
+}
+
+.menubar-project-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 1.08rem;
+  line-height: 1.08;
+  font-weight: 680;
+  letter-spacing: 0;
+  color: var(--ink);
+}
+
+.menubar-project-state {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.38rem;
+  padding-top: 0.04rem;
+  font-size: 0.6rem;
+  color: var(--muted);
+}
+
+.menubar-project-state-dot {
+  width: 0.46rem;
+  height: 0.46rem;
+  border-radius: 999px;
+  background: var(--warn);
+}
+
+.menubar-project-state-dot[data-status="live"] {
+  background: var(--good);
+}
+
+.menubar-project-state-dot[data-status="blocked"],
+.menubar-project-state-dot[data-status="uninitialized"] {
+  background: var(--danger);
+}
+
+.menubar-project-state-dot[data-status="done"] {
+  background: var(--line-strong);
+}
+
+.menubar-project-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.42rem;
+  min-width: 0;
+}
+
+.menubar-project-branch,
+.menubar-project-position,
+.menubar-project-freshness {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.62rem;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  letter-spacing: 0.06em;
+}
+
+.menubar-project-position,
+.menubar-project-freshness {
+  color: var(--subtle);
+}
+
+.menubar-project-position::before,
+.menubar-project-freshness::before {
+  content: "·";
+  margin-right: 0.42rem;
+  color: var(--line-strong);
+}
+
+.menubar-next-action {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 0.55rem;
+  padding-top: 0.08rem;
+}
+
+.menubar-next-action span {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent-ink);
+}
+
+.menubar-next-action p {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.74rem;
+  line-height: 1.25;
+  color: var(--ink);
+}
+
+.menubar-empty,
+.menubar-error {
+  padding: 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: color-mix(in oklab, var(--surface) 70%, transparent);
+}
+
+.menubar-error {
+  color: color-mix(in oklab, var(--danger) 74%, white);
+  border-color: color-mix(in oklab, var(--danger) 48%, var(--line));
+}
+
+.menubar-scroll {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: 0;
+  scrollbar-gutter: auto;
+}
+
+.menubar-dashboard {
+  width: 100%;
+}
+
+.menubar-dashboard .focus {
+  gap: 0.92rem;
+}
+
+.menubar-dashboard .focus-head {
+  gap: 0.24rem;
+}
+
+.menubar-dashboard .focus-kicker,
+.menubar-dashboard .focus-step-label,
+.menubar-dashboard .focus-feed-head h3,
+.menubar-dashboard .focus-feed-count {
+  font-size: 0.64rem;
+  letter-spacing: 0.12em;
+}
+
+.menubar-dashboard .focus-when {
+  font-size: 1.55rem;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.menubar-dashboard .focus-context {
+  display: none;
+}
+
+.menubar-dashboard .focus-project {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  font-size: 0.86rem;
+}
+
+.menubar-dashboard .focus-meta {
+  font-size: 0.68rem;
+}
+
+.menubar-dashboard .focus-step,
+.menubar-dashboard .focus-feed {
+  padding: 0.9rem 1rem 0.95rem;
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--surface) 62%, transparent);
+}
+
+.menubar-dashboard .focus-step-body,
+.menubar-dashboard .focus-feed-text {
+  font-size: 0.78rem;
+  line-height: 1.38;
+}
+
+.menubar-dashboard .focus-feed {
+  gap: 0.38rem;
+}
+
+.menubar-dashboard .focus-feed-meta {
+  display: none;
+}
+
+.menubar-dashboard .focus-feed-entry {
+  grid-template-columns: 3.7rem 9px minmax(0, 1fr);
+  column-gap: 0.85rem;
+  padding: 0.24rem 0;
+}
+
+.menubar-dashboard .focus-feed-list::before {
+  left: calc(3.7rem + 4px);
+}
+
+.menubar-dashboard .focus-feed-time,
+.menubar-dashboard .focus-feed-meta span,
+.menubar-dashboard .focus-feed-blockers span,
+.menubar-dashboard .focus-feed-more {
+  font-size: 0.62rem;
+}
+
+.menubar-dashboard .focus-feed-dot {
+  width: 9px;
+  height: 9px;
+  margin-top: 0.38rem;
+}
+
+.menubar-dashboard .focus-foot {
+  display: none;
+}
+
+.menubar-foot {
+  display: grid;
+  grid-template-columns: auto;
+  justify-content: center;
+  gap: 0.55rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid color-mix(in oklab, var(--line) 78%, transparent);
+}
+
+.menubar-foot button {
+  width: min(18rem, 100%);
+  min-width: 14rem;
+  border-radius: 8px;
+  min-height: 2.25rem;
+}
+
 .switcher {
   position: sticky;
   top: 0;

@@ -30,13 +30,13 @@ use parallel_workflow_core::{
     missing_watched_root_coverage, propose_decision, remove_watched_root_index_state,
     resolve_watched_roots, start_step, ActivitySource, BoardProjectDetail, DecisionProposalInput,
     InitProjectInput, MutationActor, ProjectSummary, RootResolutionSurface, SessionContextInput,
-    CANONICAL_INDEX_DB_FILE,
+    SessionStatus, CANONICAL_INDEX_DB_FILE,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{
-    menu::{MenuBuilder, MenuItem, PredefinedMenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, RunEvent, State,
+    menu::{Menu, MenuBuilder, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
+    AppHandle, Emitter, Manager, PhysicalPosition, RunEvent, State, WindowEvent,
 };
 use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
@@ -120,11 +120,8 @@ struct BridgeDoctorReport {
 }
 
 #[derive(Clone)]
-struct TrayMenuHandles {
-    project: MenuItem<tauri::Wry>,
-    step: MenuItem<tauri::Wry>,
-    blockers: MenuItem<tauri::Wry>,
-    next_action: MenuItem<tauri::Wry>,
+struct TrayMenuState {
+    _tray: TrayIcon<tauri::Wry>,
 }
 
 struct AppState {
@@ -132,7 +129,7 @@ struct AppState {
     index_db_path: PathBuf,
     watcher: Mutex<Option<RecommendedWatcher>>,
     local_write_suppression: Mutex<HashMap<String, std::time::Instant>>,
-    tray_handles: Mutex<Option<TrayMenuHandles>>,
+    tray_menu: Mutex<Option<TrayMenuState>>,
     bridge: Mutex<BridgeSupervisor>,
 }
 
@@ -145,6 +142,8 @@ struct BridgeSupervisor {
 
 const DESKTOP_ACTOR_ID: &str = "desktop-user";
 const DEFAULT_PROJECT_KIND: &str = "software";
+const DASHBOARD_WINDOW_LABEL: &str = "main";
+const MENU_BAR_WINDOW_LABEL: &str = "menubar";
 const WORKFLOW_TOPOLOGY_EVENT: &str = "workflow://topology-changed";
 const WORKFLOW_SNAPSHOT_EVENT: &str = "workflow://snapshot-changed";
 const LOCAL_WRITE_SUPPRESSION_WINDOW_MS: u64 = 1500;
@@ -963,66 +962,242 @@ fn cli_install_status() -> Result<CliInstallStatus, String> {
     ))
 }
 
-fn sync_tray(app: &AppHandle, state: &AppState, payload: &LoadStatePayload) -> Result<(), String> {
-    let handles_guard = state
-        .tray_handles
-        .lock()
-        .map_err(|_| "tray mutex poisoned".to_string())?;
-    let Some(handles) = handles_guard.as_ref() else {
-        return Ok(());
-    };
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TrayBoardSnapshot {
+    title: String,
+    tooltip: String,
+    status: String,
+    sessions: Vec<String>,
+    details: Vec<String>,
+}
 
-    let focused_root = payload.settings.last_focused_project.clone();
-    let focused_summary = payload
+struct TraySessionLine {
+    line: String,
+    last_updated_at: String,
+}
+
+struct TrayDetailLine {
+    line: String,
+    last_updated_at: String,
+}
+
+fn pluralize(count: usize, singular: &str, plural: &str) -> String {
+    if count == 1 {
+        format!("{count} {singular}")
+    } else {
+        format!("{count} {plural}")
+    }
+}
+
+fn truncate_menu_text(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+
+    let mut trimmed = value
+        .chars()
+        .take(max_chars.saturating_sub(1))
+        .collect::<String>();
+    trimmed.push_str("...");
+    trimmed
+}
+
+fn empty_tray_board_snapshot() -> TrayBoardSnapshot {
+    TrayBoardSnapshot {
+        title: String::new(),
+        tooltip: "No watched projects".to_string(),
+        status: "No watched projects".to_string(),
+        sessions: vec!["No active sessions".to_string()],
+        details: vec!["Open dashboard to add a watched root.".to_string()],
+    }
+}
+
+fn build_tray_board_snapshot(payload: &LoadStatePayload) -> TrayBoardSnapshot {
+    if payload.projects.is_empty() {
+        return empty_tray_board_snapshot();
+    }
+
+    let project_lookup = payload
         .projects
         .iter()
-        .find(|project| focused_root.as_deref() == Some(project.root.as_str()));
+        .map(|project| (project.root.as_str(), project))
+        .collect::<HashMap<_, _>>();
 
-    let project_text = focused_summary
-        .as_ref()
-        .map(|summary| format!("Project: {}", summary.name))
-        .unwrap_or_else(|| "Project: none".to_string());
-    let step_text = focused_summary
-        .as_ref()
-        .and_then(|summary| summary.current_step_title.clone())
-        .map(|step| format!("Step: {step}"))
-        .unwrap_or_else(|| "Step: none".to_string());
-    let blocker_text = focused_summary
-        .as_ref()
-        .map(|summary| {
-            format!(
-                "Progress: {}/{} · {} sessions · {} blockers",
-                summary.completed_step_count,
-                summary.total_step_count,
-                summary.active_session_count,
-                summary.blocker_count
-            )
-        })
-        .unwrap_or_else(|| "Progress: 0/0 · 0 sessions · 0 blockers".to_string());
-    let next_text = focused_summary
-        .as_ref()
-        .and_then(|summary| summary.next_action.clone())
-        .map(|next| format!("Next: {next}"))
-        .unwrap_or_else(|| "Next: none".to_string());
+    let mut session_lines = Vec::new();
+    let mut detail_lines = Vec::new();
+    let mut blocker_count = 0usize;
 
-    handles
-        .project
-        .set_text(project_text)
+    for board_project in &payload.board_projects {
+        let Some(project) = project_lookup.get(board_project.root.as_str()) else {
+            continue;
+        };
+
+        let project_blocked = !board_project.blockers.is_empty();
+        blocker_count += board_project.blockers.len();
+
+        let active_sessions = board_project
+            .sessions
+            .iter()
+            .filter(|session| session.status == SessionStatus::Active)
+            .collect::<Vec<_>>();
+        let project_last_updated_at = active_sessions
+            .iter()
+            .map(|session| session.last_updated_at.as_str())
+            .max()
+            .unwrap_or("");
+
+        for blocker in board_project.blockers.iter().take(2) {
+            detail_lines.push(TrayDetailLine {
+                line: truncate_menu_text(&format!("{} blocker: {blocker}", project.name), 80),
+                last_updated_at: project_last_updated_at.to_string(),
+            });
+        }
+
+        if !active_sessions.is_empty() && !board_project.runtime_next_action.is_empty() {
+            detail_lines.push(TrayDetailLine {
+                line: truncate_menu_text(
+                    &format!(
+                        "{} next: {}",
+                        project.name, board_project.runtime_next_action
+                    ),
+                    80,
+                ),
+                last_updated_at: project_last_updated_at.to_string(),
+            });
+        }
+
+        for session in active_sessions {
+            let step = session
+                .owned_step_id
+                .as_ref()
+                .and_then(|step_id| board_project.active_step_lookup.get(step_id));
+            let display_state = if project_blocked {
+                "Blocked"
+            } else if step.is_some() {
+                "Active"
+            } else {
+                "Unclaimed"
+            };
+            let session_title = if session.title.is_empty() {
+                session.actor.as_str()
+            } else {
+                session.title.as_str()
+            };
+            let step_title = step
+                .map(|step| step.title.as_str())
+                .unwrap_or("No step claimed");
+            session_lines.push(TraySessionLine {
+                line: truncate_menu_text(
+                    &format!(
+                        "{display_state} · {} · {session_title} · {step_title}",
+                        project.name
+                    ),
+                    92,
+                ),
+                last_updated_at: session.last_updated_at.clone(),
+            });
+        }
+    }
+
+    session_lines.sort_by(|left, right| right.last_updated_at.cmp(&left.last_updated_at));
+    let active_session_count = session_lines.len();
+    let mut sessions = session_lines
+        .into_iter()
+        .take(8)
+        .map(|session| session.line)
+        .collect::<Vec<_>>();
+    if sessions.is_empty() {
+        sessions.push("No active sessions".to_string());
+    }
+    detail_lines.sort_by(|left, right| right.last_updated_at.cmp(&left.last_updated_at));
+    let mut details = detail_lines
+        .into_iter()
+        .map(|detail| detail.line)
+        .collect::<Vec<_>>();
+    if details.is_empty() {
+        details.push("No blockers or next actions.".to_string());
+    }
+
+    let status = format!(
+        "{} · {} · {}",
+        pluralize(payload.projects.len(), "project", "projects"),
+        pluralize(active_session_count, "active session", "active sessions"),
+        pluralize(blocker_count, "blocker", "blockers")
+    );
+
+    TrayBoardSnapshot {
+        title: String::new(),
+        tooltip: status.clone(),
+        status,
+        sessions,
+        details: details.into_iter().take(8).collect(),
+    }
+}
+
+fn build_tray_menu(
+    app: &AppHandle,
+    snapshot: &TrayBoardSnapshot,
+) -> Result<Menu<tauri::Wry>, String> {
+    let status_item = MenuItem::with_id(
+        app,
+        "tray-status",
+        snapshot.status.as_str(),
+        false,
+        None::<&str>,
+    )
+    .map_err(|error| error.to_string())?;
+    let mut builder = MenuBuilder::new(app).item(&status_item).separator();
+
+    for (index, session) in snapshot.sessions.iter().enumerate() {
+        let item = MenuItem::with_id(
+            app,
+            format!("tray-session-{index}"),
+            session.as_str(),
+            false,
+            None::<&str>,
+        )
         .map_err(|error| error.to_string())?;
-    handles
-        .step
-        .set_text(step_text)
+        builder = builder.item(&item);
+    }
+
+    builder = builder.separator();
+    for (index, detail) in snapshot.details.iter().enumerate() {
+        let item = MenuItem::with_id(
+            app,
+            format!("tray-detail-{index}"),
+            detail.as_str(),
+            false,
+            None::<&str>,
+        )
         .map_err(|error| error.to_string())?;
-    handles
-        .blockers
-        .set_text(blocker_text)
-        .map_err(|error| error.to_string())?;
-    handles
-        .next_action
-        .set_text(next_text.clone())
-        .map_err(|error| error.to_string())?;
+        builder = builder.item(&item);
+    }
+
+    builder
+        .separator()
+        .text("open", "Open dashboard")
+        .text("quit", "Quit")
+        .build()
+        .map_err(|error| error.to_string())
+}
+
+fn sync_tray(app: &AppHandle, state: &AppState, payload: &LoadStatePayload) -> Result<(), String> {
+    let handles_guard = state
+        .tray_menu
+        .lock()
+        .map_err(|_| "tray mutex poisoned".to_string())?;
+    if handles_guard.is_none() {
+        return Ok(());
+    }
+    drop(handles_guard);
+
+    let snapshot = build_tray_board_snapshot(payload);
     if let Some(tray) = app.tray_by_id("workflow-tray") {
-        tray.set_tooltip(Some(next_text))
+        tray.set_menu(Some(build_tray_menu(app, &snapshot)?))
+            .map_err(|error| error.to_string())?;
+        tray.set_title(None::<&str>)
+            .map_err(|error| error.to_string())?;
+        tray.set_tooltip(Some(snapshot.tooltip))
             .map_err(|error| error.to_string())?;
     }
     Ok(())
@@ -1030,9 +1205,58 @@ fn sync_tray(app: &AppHandle, state: &AppState, payload: &LoadStatePayload) -> R
 
 fn open_main_window(app: &AppHandle) -> Result<(), String> {
     let window = app
-        .get_webview_window("main")
+        .get_webview_window(DASHBOARD_WINDOW_LABEL)
         .ok_or_else(|| "main window missing".to_string())?;
     window.unminimize().map_err(|error| error.to_string())?;
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn should_hide_dashboard_on_close(label: &str) -> bool {
+    label == DASHBOARD_WINDOW_LABEL
+}
+
+fn hide_dashboard_window(app: &AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window(DASHBOARD_WINDOW_LABEL)
+        .ok_or_else(|| "main window missing".to_string())?;
+    window.hide().map_err(|error| error.to_string())
+}
+
+fn should_hide_menu_bar_popover_on_blur(label: &str, focused: bool) -> bool {
+    label == MENU_BAR_WINDOW_LABEL && !focused
+}
+
+fn menu_bar_popover_position(click_x: f64, click_y: f64, window_width: u32) -> PhysicalPosition<i32> {
+    let left = (click_x.round() as i32 - (window_width as i32 / 2)).max(8);
+    let top = (click_y.round() as i32 + 8).max(8);
+    PhysicalPosition::new(left, top)
+}
+
+fn hide_menu_bar_popover(app: &AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window(MENU_BAR_WINDOW_LABEL)
+        .ok_or_else(|| "menu bar window missing".to_string())?;
+    window.hide().map_err(|error| error.to_string())
+}
+
+fn toggle_menu_bar_popover(app: &AppHandle, position: PhysicalPosition<f64>) -> Result<(), String> {
+    let window = app
+        .get_webview_window(MENU_BAR_WINDOW_LABEL)
+        .ok_or_else(|| "menu bar window missing".to_string())?;
+    if window.is_visible().map_err(|error| error.to_string())? {
+        window.hide().map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+
+    let width = window
+        .outer_size()
+        .map(|size| size.width)
+        .unwrap_or(420);
+    window
+        .set_position(menu_bar_popover_position(position.x, position.y, width))
+        .map_err(|error| error.to_string())?;
     window.show().map_err(|error| error.to_string())?;
     window.set_focus().map_err(|error| error.to_string())?;
     Ok(())
@@ -1861,42 +2085,36 @@ fn install_cli_cmd() -> Result<String, String> {
     to_json_string(&cli_install_status()?)
 }
 
+#[tauri::command]
+fn open_dashboard_cmd(app: AppHandle) -> Result<(), String> {
+    let _ = hide_menu_bar_popover(&app);
+    open_main_window(&app)
+}
+
+#[tauri::command]
+fn hide_menu_bar_popover_cmd(app: AppHandle) -> Result<(), String> {
+    hide_menu_bar_popover(&app)
+}
+
+#[tauri::command]
+fn quit_app_cmd(app: AppHandle) -> Result<(), String> {
+    app.exit(0);
+    Ok(())
+}
+
 fn build_tray(app: &AppHandle, state: &AppState) -> Result<(), String> {
-    let project_item = MenuItem::with_id(app, "project", "Project: none", false, None::<&str>)
-        .map_err(|error| error.to_string())?;
-    let step_item = MenuItem::with_id(app, "step", "Step: none", false, None::<&str>)
-        .map_err(|error| error.to_string())?;
-    let blockers_item = MenuItem::with_id(app, "blockers", "Blockers: 0", false, None::<&str>)
-        .map_err(|error| error.to_string())?;
-    let next_item = MenuItem::with_id(app, "next", "Next: none", false, None::<&str>)
-        .map_err(|error| error.to_string())?;
-    let open_item = MenuItem::with_id(app, "open", "Open dashboard", true, None::<&str>)
-        .map_err(|error| error.to_string())?;
-    let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)
-        .map_err(|error| error.to_string())?;
-    let separator = PredefinedMenuItem::separator(app).map_err(|error| error.to_string())?;
+    let snapshot = empty_tray_board_snapshot();
+    let menu = build_tray_menu(app, &snapshot)?;
 
-    let menu = MenuBuilder::new(app)
-        .items(&[
-            &project_item,
-            &step_item,
-            &blockers_item,
-            &next_item,
-            &separator,
-            &open_item,
-            &quit_item,
-        ])
-        .build()
-        .map_err(|error| error.to_string())?;
-
-    let _tray = TrayIconBuilder::with_id("workflow-tray")
+    let tray = TrayIconBuilder::with_id("workflow-tray")
         .menu(&menu)
         .icon(
             app.default_window_icon()
                 .cloned()
                 .ok_or_else(|| "default window icon missing".to_string())?,
         )
-        .tooltip("Project Workflow OS")
+        .icon_as_template(true)
+        .tooltip(&snapshot.tooltip)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open" => {
@@ -1911,26 +2129,30 @@ fn build_tray(app: &AppHandle, state: &AppState) -> Result<(), String> {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
+                position,
                 ..
             } = event
             {
-                let _ = open_main_window(&tray.app_handle());
+                let _ = toggle_menu_bar_popover(&tray.app_handle(), position);
             }
         })
         .build(app)
         .map_err(|error| error.to_string())?;
+    tray.set_visible(true).map_err(|error| error.to_string())?;
 
     let mut guard = state
-        .tray_handles
+        .tray_menu
         .lock()
         .map_err(|_| "tray mutex poisoned".to_string())?;
-    *guard = Some(TrayMenuHandles {
-        project: project_item,
-        step: step_item,
-        blockers: blockers_item,
-        next_action: next_item,
-    });
+    *guard = Some(TrayMenuState { _tray: tray });
     Ok(())
+}
+
+fn configure_menu_bar_activation(app: &mut tauri::App) {
+    #[cfg(target_os = "macos")]
+    {
+        app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+    }
 }
 
 fn main() {
@@ -1938,6 +2160,7 @@ fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
+            configure_menu_bar_activation(app);
             let support_dir = app_support_dir(app.handle())?;
             fs::create_dir_all(&support_dir).map_err(|error| error.to_string())?;
             let index_db_path = resolve_desktop_index_db_path(app.handle())?;
@@ -1946,7 +2169,7 @@ fn main() {
                 index_db_path,
                 watcher: Mutex::new(None),
                 local_write_suppression: Mutex::new(HashMap::new()),
-                tray_handles: Mutex::new(None),
+                tray_menu: Mutex::new(None),
                 bridge: Mutex::new(BridgeSupervisor {
                     child: None,
                     child_pid: None,
@@ -1996,12 +2219,15 @@ fn main() {
             apply_agent_defaults_cmd,
             get_cli_install_status,
             install_cli_cmd,
+            open_dashboard_cmd,
+            hide_menu_bar_popover_cmd,
+            quit_app_cmd,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    app.run(|app, event| {
-        if let RunEvent::Ready = event {
+    app.run(|app, event| match event {
+        RunEvent::Ready => {
             let state_ref = app.state::<AppState>();
             if let Ok(settings) = ensure_settings(&state_ref) {
                 if settings.mcp.enabled {
@@ -2009,6 +2235,22 @@ fn main() {
                 }
             }
         }
+        RunEvent::WindowEvent {
+            label,
+            event: WindowEvent::CloseRequested { api, .. },
+            ..
+        } if should_hide_dashboard_on_close(&label) => {
+            api.prevent_close();
+            let _ = hide_dashboard_window(app);
+        }
+        RunEvent::WindowEvent {
+            label,
+            event: WindowEvent::Focused(focused),
+            ..
+        } if should_hide_menu_bar_popover_on_blur(&label, focused) => {
+            let _ = hide_menu_bar_popover(app);
+        }
+        _ => {}
     });
 }
 
@@ -2025,7 +2267,9 @@ fn init_tracing() {
 mod tests {
     use super::*;
     use crate::bridge::bundled_sidecar_binary_filename;
+    use parallel_workflow_core::{BoardStepDetail, SessionStatus, WorkflowSession};
     use rand::{distributions::Alphanumeric, Rng};
+    use std::collections::BTreeMap;
 
     fn unique_temp_dir(label: &str) -> PathBuf {
         let suffix = rand::thread_rng()
@@ -2049,7 +2293,7 @@ mod tests {
             index_db_path: base.join("workflow-index.sqlite"),
             watcher: Mutex::new(None),
             local_write_suppression: Mutex::new(HashMap::new()),
-            tray_handles: Mutex::new(None),
+            tray_menu: Mutex::new(None),
             bridge: Mutex::new(BridgeSupervisor {
                 child: None,
                 child_pid: None,
@@ -2059,6 +2303,85 @@ mod tests {
                     ..BridgeRuntimeSnapshot::default()
                 },
             }),
+        }
+    }
+
+    fn test_project_summary(name: &str, root: &str) -> ProjectSummary {
+        ProjectSummary {
+            id: Some(name.to_ascii_lowercase()),
+            name: name.to_string(),
+            root: root.to_string(),
+            kind: Some(DEFAULT_PROJECT_KIND.to_string()),
+            owner: Some(DESKTOP_ACTOR_ID.to_string()),
+            tags: Vec::new(),
+            initialized: true,
+            status: "active".to_string(),
+            stale: false,
+            missing: false,
+            current_step_id: None,
+            current_step_title: None,
+            blocker_count: 0,
+            total_step_count: 0,
+            completed_step_count: 0,
+            active_session_count: 0,
+            focus_session_id: None,
+            last_updated_at: None,
+            next_action: None,
+            active_branch: None,
+            pending_proposal_count: 0,
+            discovery_source: None,
+            discovery_path: None,
+            last_seen_at: None,
+        }
+    }
+
+    fn test_session(
+        id: &str,
+        title: &str,
+        branch: &str,
+        owned_step_id: Option<&str>,
+        status: SessionStatus,
+        last_updated_at: &str,
+    ) -> WorkflowSession {
+        WorkflowSession {
+            id: id.to_string(),
+            title: title.to_string(),
+            actor: "codex".to_string(),
+            source: ActivitySource::Agent,
+            branch: Some(branch.to_string()),
+            status,
+            owned_step_id: owned_step_id.map(str::to_string),
+            observed_step_ids: Vec::new(),
+            started_at: last_updated_at.to_string(),
+            last_updated_at: last_updated_at.to_string(),
+        }
+    }
+
+    fn test_board_project(
+        root: &str,
+        sessions: Vec<WorkflowSession>,
+        blockers: Vec<String>,
+        runtime_next_action: &str,
+        steps: Vec<(&str, &str, &str)>,
+    ) -> BoardProjectDetail {
+        BoardProjectDetail {
+            root: root.to_string(),
+            sessions,
+            runtime_next_action: runtime_next_action.to_string(),
+            blockers,
+            recent_activity: Vec::new(),
+            active_step_lookup: steps
+                .into_iter()
+                .map(|(id, title, summary)| {
+                    (
+                        id.to_string(),
+                        BoardStepDetail {
+                            title: title.to_string(),
+                            summary: summary.to_string(),
+                        },
+                    )
+                })
+                .collect::<BTreeMap<_, _>>(),
         }
     }
 
@@ -2200,6 +2523,97 @@ mod tests {
             &state,
             &[repo.join(".project-workflow/local/runtime.yaml")]
         ));
+    }
+
+    #[test]
+    fn tray_board_snapshot_lists_active_sessions_across_projects() {
+        let payload = LoadStatePayload {
+            settings: Settings {
+                watched_roots: vec!["/workspace".to_string()],
+                last_focused_project: Some("/workspace/parallel".to_string()),
+                mcp: BridgeSettings {
+                    enabled: false,
+                    port: DEFAULT_BRIDGE_PORT,
+                    token: String::new(),
+                },
+            },
+            projects: vec![
+                test_project_summary("Parallel", "/workspace/parallel"),
+                test_project_summary("Baryon", "/workspace/baryon"),
+            ],
+            board_projects: vec![
+                test_board_project(
+                    "/workspace/parallel",
+                    vec![test_session(
+                        "session-1",
+                        "Wire tray board",
+                        "codex/tray-board",
+                        Some("step-1"),
+                        SessionStatus::Active,
+                        "2026-04-24T10:00:00Z",
+                    )],
+                    vec![],
+                    "Review current menu-bar state",
+                    vec![("step-1", "Mirror desktop board", "Expose active sessions")],
+                ),
+                test_board_project(
+                    "/workspace/baryon",
+                    vec![test_session(
+                        "session-2",
+                        "Investigate live output",
+                        "fix/live-output",
+                        None,
+                        SessionStatus::Active,
+                        "2026-04-24T10:05:00Z",
+                    )],
+                    vec!["Need device repro".to_string()],
+                    "Claim the next diagnostic step",
+                    vec![],
+                ),
+            ],
+            mcp_runtime: BridgeRuntimeSnapshot::default(),
+        };
+
+        let snapshot = build_tray_board_snapshot(&payload);
+
+        assert_eq!(snapshot.title, "");
+        assert_eq!(
+            snapshot.status,
+            "2 projects · 2 active sessions · 1 blocker"
+        );
+        assert_eq!(
+            snapshot.sessions,
+            vec![
+                "Blocked · Baryon · Investigate live output · No step claimed".to_string(),
+                "Active · Parallel · Wire tray board · Mirror desktop board".to_string(),
+            ]
+        );
+        assert_eq!(
+            snapshot.details,
+            vec![
+                "Baryon blocker: Need device repro".to_string(),
+                "Baryon next: Claim the next diagnostic step".to_string(),
+                "Parallel next: Review current menu-bar state".to_string(),
+            ]
+        );
+        assert_eq!(
+            snapshot.tooltip,
+            "2 projects · 2 active sessions · 1 blocker"
+        );
+    }
+
+    #[test]
+    fn dashboard_close_policy_only_hides_main_window() {
+        assert!(should_hide_dashboard_on_close("main"));
+        assert!(!should_hide_dashboard_on_close("settings"));
+    }
+
+    #[test]
+    fn menu_bar_popover_position_centers_under_tray_click() {
+        let position = menu_bar_popover_position(500.0, 24.0, 420);
+
+        assert_eq!(position.x, 290);
+        assert_eq!(position.y, 32);
     }
 
     #[test]

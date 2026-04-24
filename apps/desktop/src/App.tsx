@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import {
   Suspense,
   lazy,
+  type KeyboardEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -18,9 +19,11 @@ import {
   getBridgeClientSnippets,
   getBridgeDoctor,
   getBridgeStatus,
+  hideMenuBarPopover,
   initProject,
   installCli,
   loadState,
+  openDashboard,
   refreshProjects,
   regenerateBridgeToken,
   removeWatchRoot,
@@ -45,8 +48,8 @@ import {
   projectLightLabel,
   type ProjectSummaryWithLight,
 } from './lib/project-light';
-import FocusView from './components/FocusView';
-import ProjectSwitcher, { hideNestedProjects } from './components/ProjectSwitcher';
+import FocusView, { resolveLastTouchedPhrase } from './components/FocusView';
+import ProjectSwitcher, { hideNestedProjects, sortProjectsByRecency } from './components/ProjectSwitcher';
 import ShaderBackdrop from './components/ShaderBackdrop';
 import type {
   AgentInstallAction,
@@ -122,7 +125,7 @@ export function buildVisibleProjects(state: LoadStatePayload | null): ProjectSum
   const boardProjectLookup = new Map(
     (state?.boardProjects ?? []).map((project) => [project.root, project] as const),
   );
-  return hideNestedProjects(state?.projects ?? []).map((project) => {
+  return sortProjectsByRecency(hideNestedProjects(state?.projects ?? [])).map((project) => {
     const lightState = deriveProjectLightState(project, boardProjectLookup.get(project.root));
     return {
       ...project,
@@ -141,6 +144,75 @@ export type EmptyStateCopy = {
   detail: string | null;
   actionLabel: string | null;
 };
+
+export type DesktopSurface = 'dashboard' | 'menubar';
+
+export function resolveDesktopSurface(search: string): DesktopSurface {
+  return new URLSearchParams(search).get('surface') === 'menubar' ? 'menubar' : 'dashboard';
+}
+
+export function buildMenubarStats(board: SessionBoardData) {
+  return {
+    activeCount: board.rows.length,
+    blockedCount: board.rows.filter((row) => row.displayState === 'blocked').length,
+    unclaimedCount: board.rows.filter((row) => row.displayState === 'needs-step').length,
+  };
+}
+
+type MenubarProjectOption = Pick<ProjectSummary, 'name' | 'root'>;
+
+export function chooseMenubarProject<T extends MenubarProjectOption>(
+  projects: T[],
+  selectedRoot: string | null,
+): T | null {
+  if (projects.length === 0) {
+    return null;
+  }
+  return projects.find((project) => project.root === selectedRoot) ?? projects[0];
+}
+
+export function chooseAdjacentMenubarProjectRoot<T extends MenubarProjectOption>(
+  projects: T[],
+  selectedRoot: string | null,
+  direction: -1 | 1,
+): string | null {
+  if (projects.length === 0) {
+    return null;
+  }
+
+  const currentIndex = Math.max(
+    0,
+    projects.findIndex((project) => project.root === selectedRoot),
+  );
+  const nextIndex = (currentIndex + direction + projects.length) % projects.length;
+  return projects[nextIndex].root;
+}
+
+export function resolveMenubarProjectKeyDirection(key: string): -1 | 1 | null {
+  if (key === 'ArrowLeft') {
+    return -1;
+  }
+  if (key === 'ArrowRight') {
+    return 1;
+  }
+  return null;
+}
+
+export function buildMenubarProjectPosition<T extends MenubarProjectOption>(
+  projects: T[],
+  selectedRoot: string | null,
+) {
+  const selectedIndex = projects.findIndex((project) => project.root === selectedRoot);
+  if (selectedIndex < 0 || projects.length === 0) {
+    return null;
+  }
+  return `${selectedIndex + 1} of ${projects.length}`;
+}
+
+export function buildMenubarFreshnessLabel(value: string | null | undefined) {
+  const phrase = resolveLastTouchedPhrase(value);
+  return phrase === 'Never touched' ? phrase : `Updated ${phrase}`;
+}
 
 export function buildEmptyState(
   noProjectsDiscovered: boolean,
@@ -182,7 +254,178 @@ function startViewTransition(update: () => void) {
   update();
 }
 
+type MenubarPopoverProps = {
+  projects: ProjectSummaryWithLight[];
+  project: ProjectSummaryWithLight | null;
+  detail: BoardProjectDetail | null;
+  session: SessionBoardRow | null;
+  summary: string;
+  stats: ReturnType<typeof buildMenubarStats>;
+  loading: boolean;
+  error: string | null;
+  onSync: () => void;
+  onSelectProject: (project: ProjectSummaryWithLight) => void;
+  onCycleProject: (direction: -1 | 1) => void;
+  onOpenDashboard: () => void;
+  onHide: () => void;
+};
+
+export function MenubarPopover({
+  projects,
+  project,
+  detail,
+  session,
+  summary,
+  stats,
+  loading,
+  error,
+  onSync,
+  onSelectProject,
+  onCycleProject,
+  onOpenDashboard,
+  onHide,
+}: MenubarPopoverProps) {
+  const selectedDotRef = useRef<HTMLButtonElement | null>(null);
+  const selectedPosition = buildMenubarProjectPosition(projects, project?.root ?? null);
+  const freshnessLabel = buildMenubarFreshnessLabel(session?.lastUpdatedAt ?? project?.lastUpdatedAt);
+  const nextAction = summary.trim();
+  const showNextAction = Boolean(nextAction) && session?.stepState !== 'owned';
+
+  useEffect(() => {
+    selectedDotRef.current?.scrollIntoView({
+      block: 'nearest',
+      inline: 'center',
+    });
+  }, [project?.root]);
+
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>) => {
+      const direction = resolveMenubarProjectKeyDirection(event.key);
+      if (direction === null) {
+        return;
+      }
+      event.preventDefault();
+      onCycleProject(direction);
+    },
+    [onCycleProject],
+  );
+
+  return (
+    <div
+      className="menubar-popover"
+      onKeyDown={handleKeyDown}
+      tabIndex={0}
+      aria-label="Parallel menu"
+    >
+      <header className="menubar-head">
+        <div>
+          <p className="menubar-kicker">parallel</p>
+          <p className="menubar-global-status">{stats.activeCount} active</p>
+        </div>
+        <div className="menubar-actions">
+          <button type="button" onClick={onSync} aria-label="Refresh tracked projects">
+            ↻
+          </button>
+          <button type="button" onClick={onHide} aria-label="Hide Parallel">
+            ×
+          </button>
+        </div>
+      </header>
+
+      <nav className="menubar-project-rail" aria-label="Projects">
+        <button
+          type="button"
+          className="menubar-rail-button"
+          onClick={() => onCycleProject(-1)}
+          disabled={projects.length < 2}
+          aria-label="Previous project"
+        >
+          ‹
+        </button>
+        <div className="menubar-project-track">
+          <div className="menubar-project-dots">
+            {projects.map((candidate) => (
+              <button
+                type="button"
+                className={`menubar-project-dot ${candidate.root === project?.root ? 'is-selected' : ''}`.trim()}
+                data-status={candidate.lightState}
+                key={candidate.root}
+                ref={candidate.root === project?.root ? selectedDotRef : null}
+                onClick={() => onSelectProject(candidate)}
+                aria-label={candidate.name}
+                aria-current={candidate.root === project?.root ? 'page' : undefined}
+                title={candidate.name}
+              />
+            ))}
+          </div>
+        </div>
+        <button
+          type="button"
+          className="menubar-rail-button"
+          onClick={() => onCycleProject(1)}
+          disabled={projects.length < 2}
+          aria-label="Next project"
+        >
+          ›
+        </button>
+      </nav>
+
+      {project ? (
+        <section className="menubar-project-identity" aria-label="Selected project">
+          <div className="menubar-project-identity-head">
+            <div className="menubar-project-title-block">
+              <p className="menubar-project-label">Viewing project</p>
+              <h2 className="menubar-project-name">{project.name}</h2>
+            </div>
+            <div className="menubar-project-state">
+              <span className="menubar-project-state-dot" data-status={project.lightState} />
+              <span>{project.lightLabel}</span>
+            </div>
+          </div>
+          <div className="menubar-project-meta-row">
+            {project.activeBranch ? (
+              <span className="menubar-project-branch">{project.activeBranch}</span>
+            ) : null}
+            {selectedPosition ? (
+              <span className="menubar-project-position">{selectedPosition}</span>
+            ) : null}
+            <span className="menubar-project-freshness">{freshnessLabel}</span>
+          </div>
+          {showNextAction ? (
+            <div className="menubar-next-action">
+              <span>Next</span>
+              <p>{nextAction}</p>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
+      <div className="menubar-scroll">
+        {loading ? <div className="menubar-empty">Loading…</div> : null}
+        {error ? <div className="menubar-error">{error}</div> : null}
+
+        {!loading && project ? (
+          <div className="menubar-dashboard">
+            <FocusView project={project} detail={detail} session={session} summary={summary} />
+          </div>
+        ) : null}
+
+        {!loading && !project ? (
+          <div className="menubar-empty">No projects in current roots.</div>
+        ) : null}
+      </div>
+
+      <footer className="menubar-foot">
+        <button type="button" onClick={onOpenDashboard}>
+          Open dashboard
+        </button>
+      </footer>
+    </div>
+  );
+}
+
 export default function App() {
+  const surface = resolveDesktopSurface(window.location.search);
   const [state, setState] = useState<LoadStatePayload | null>(null);
   const [selectedRoot, setSelectedRoot] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
@@ -559,6 +802,42 @@ export default function App() {
     );
   }, [selectedBoardProject, selectedBoardRow?.summary, selectedSummary]);
 
+  const menubarProject = useMemo(() => {
+    return chooseMenubarProject(visibleProjects, selectedRoot);
+  }, [selectedRoot, visibleProjects]);
+
+  const menubarBoardRow = useMemo(() => {
+    return choosePrimaryBoardRow(
+      board,
+      menubarProject?.root ?? null,
+      selectedSessionId,
+      menubarProject?.focusSessionId ?? null,
+    );
+  }, [board, menubarProject?.focusSessionId, menubarProject?.root, selectedSessionId]);
+
+  const menubarBoardProject = useMemo<BoardProjectDetail | null>(() => {
+    return state?.boardProjects.find((candidate) => candidate.root === menubarProject?.root) ?? null;
+  }, [menubarProject?.root, state?.boardProjects]);
+
+  const menubarStepSummary = useMemo(() => {
+    if (menubarBoardRow?.summary) {
+      return menubarBoardRow.summary;
+    }
+    if (menubarProject?.currentStepId) {
+      const activeStep = menubarBoardProject?.activeStepLookup[menubarProject.currentStepId];
+      if (activeStep?.summary) {
+        return activeStep.summary;
+      }
+    }
+    return (
+      menubarBoardProject?.runtimeNextAction ??
+      menubarProject?.nextAction ??
+      'Nothing claimed yet.'
+    );
+  }, [menubarBoardProject, menubarBoardRow?.summary, menubarProject]);
+
+  const menubarStats = useMemo(() => buildMenubarStats(board), [board]);
+
   const noProjectsDiscovered =
     !loading && Boolean(state) && state.settings.watchedRoots.length > 0 && state.projects.length === 0;
   const emptyStateCopy = buildEmptyState(noProjectsDiscovered, {
@@ -766,6 +1045,16 @@ export default function App() {
     })();
   }, [applyLoadState]);
 
+  const handleOpenDashboard = useCallback(() => {
+    void openDashboard().catch((openError) => {
+      setError(openError instanceof Error ? openError.message : String(openError));
+    });
+  }, []);
+
+  const handleHidePopover = useCallback(() => {
+    void hideMenuBarPopover().catch(() => {});
+  }, []);
+
   const handleToggleSettings = useCallback(
     () => startViewTransition(() => setSettingsOpen((open) => !open)),
     [],
@@ -790,6 +1079,20 @@ export default function App() {
     },
     [selectProject],
   );
+  const handleCycleMenubarProject = useCallback(
+    (direction: -1 | 1) => {
+      const nextRoot = chooseAdjacentMenubarProjectRoot(
+        visibleProjects,
+        menubarProject?.root ?? selectedRoot,
+        direction,
+      );
+      const nextProject = visibleProjects.find((project) => project.root === nextRoot);
+      if (nextProject) {
+        void selectProject(nextProject);
+      }
+    },
+    [menubarProject?.root, selectProject, selectedRoot, visibleProjects],
+  );
 
   const bridgePort = state?.mcpRuntime.boundPort ?? state?.settings.mcp.port ?? null;
   const bridgeUrl = bridgePort ? `http://127.0.0.1:${bridgePort}/mcp` : 'Not configured';
@@ -806,6 +1109,26 @@ export default function App() {
     },
     Boolean(state?.settings.mcp.enabled),
   );
+
+  if (surface === 'menubar') {
+    return (
+      <MenubarPopover
+        projects={visibleProjects}
+        project={menubarProject}
+        detail={menubarBoardProject}
+        session={menubarBoardRow}
+        summary={menubarStepSummary}
+        stats={menubarStats}
+        loading={loading}
+        error={error}
+        onSync={handleSync}
+        onSelectProject={handleProjectSelection}
+        onCycleProject={handleCycleMenubarProject}
+        onOpenDashboard={handleOpenDashboard}
+        onHide={handleHidePopover}
+      />
+    );
+  }
 
   return (
     <div className="shell">

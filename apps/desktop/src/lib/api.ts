@@ -133,3 +133,18 @@ export async function getCliInstallStatus() {
 export async function installCli() {
   return invokeJson<CliInstallStatus>('install_cli_cmd');
 }
+
+export async function openDashboard() {
+  ensureTauriRuntime('open_dashboard_cmd');
+  await invoke('open_dashboard_cmd');
+}
+
+export async function hideMenuBarPopover() {
+  ensureTauriRuntime('hide_menu_bar_popover_cmd');
+  await invoke('hide_menu_bar_popover_cmd');
+}
+
+export async function quitApp() {
+  ensureTauriRuntime('quit_app_cmd');
+  await invoke('quit_app_cmd');
+}
