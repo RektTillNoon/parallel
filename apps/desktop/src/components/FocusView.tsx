@@ -52,6 +52,7 @@ function statusBadge(state: SessionBoardDisplayState, label: string) {
 export default memo(function FocusView({ project, detail, session, summary }: FocusViewProps) {
   const lastTouchedAt = session?.lastUpdatedAt ?? project.lastUpdatedAt;
   const compact = detail ? compactActivityEntries(detail.recentActivity) : { entries: [], hiddenCount: 0 };
+  const showWorkingStep = session?.stepState === 'owned';
 
   return (
     <section className="focus">
@@ -67,10 +68,12 @@ export default memo(function FocusView({ project, detail, session, summary }: Fo
         </div>
       </header>
 
-      <article className="focus-step">
-        <p className="focus-step-label">Working on</p>
-        <p className="focus-step-body">{summary}</p>
-      </article>
+      {showWorkingStep ? (
+        <article className="focus-step">
+          <p className="focus-step-label">Working on</p>
+          <p className="focus-step-body">{summary}</p>
+        </article>
+      ) : null}
 
       <section className="focus-feed" aria-label="Execution timeline">
         <header className="focus-feed-head">

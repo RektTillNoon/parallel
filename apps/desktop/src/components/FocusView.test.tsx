@@ -112,7 +112,7 @@ describe('FocusView', () => {
     vi.useRealTimers();
   });
 
-  it('leads with when and what, then renders one execution timeline', () => {
+  it('hides the working-on panel for unclaimed sessions', () => {
     const html = renderToStaticMarkup(
       <FocusView
         project={project}
@@ -127,8 +127,8 @@ describe('FocusView', () => {
     expect(html).toContain('trading');
     expect(html).toContain('main');
     expect(html).toContain('unclaimed');
-    expect(html).toContain('Working on');
-    expect(html).toContain('Write the initial problem statement and success criteria.');
+    expect(html).not.toContain('Working on');
+    expect(html).not.toContain('Write the initial problem statement and success criteria.');
     expect(html).toContain('Execution timeline');
     expect(html).toContain('execution.updated');
     expect(html).toContain('session-1');
@@ -141,6 +141,28 @@ describe('FocusView', () => {
     expect(html).not.toContain('Project pulse');
     expect(html).not.toContain('live sessions');
     expect(html).not.toContain('steps done');
+  });
+
+  it('shows the working-on panel for owned active steps', () => {
+    const html = renderToStaticMarkup(
+      <FocusView
+        project={project}
+        detail={detail}
+        session={{
+          ...session,
+          stepId: 'capture-requirements',
+          stepTitle: 'Capture requirements',
+          summary: 'Capture the working session requirements.',
+          displayState: 'active',
+          displayLabel: 'active',
+          stepState: 'owned',
+        }}
+        summary="Capture the working session requirements."
+      />,
+    );
+
+    expect(html).toContain('Working on');
+    expect(html).toContain('Capture the working session requirements.');
   });
 
   it('hides the status badge when the session is active', () => {
