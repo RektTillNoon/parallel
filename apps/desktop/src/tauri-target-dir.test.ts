@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
@@ -62,14 +62,16 @@ describe('desktop tauri script', () => {
     });
   });
 
-  it('packages macOS as a UIElement so the tray owns the cold-start surface', () => {
-    const infoPlist = readFileSync(
-      new URL('../src-tauri/Info.plist', import.meta.url),
-      'utf8',
-    );
+  it('does not force macOS LSUIElement because runtime activation owns mode changes', () => {
+    const infoPlistPath = new URL('../src-tauri/Info.plist', import.meta.url);
 
-    expect(infoPlist).toContain('<key>LSUIElement</key>');
-    expect(infoPlist).toContain('<true/>');
+    if (!existsSync(infoPlistPath)) {
+      expect(existsSync(infoPlistPath)).toBe(false);
+      return;
+    }
+
+    const infoPlist = readFileSync(infoPlistPath, 'utf8');
+    expect(infoPlist).not.toContain('<key>LSUIElement</key>');
   });
 
   it('does not configure a second tray icon in tauri config', () => {

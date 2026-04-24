@@ -2455,6 +2455,8 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "notify",
+ "objc2",
+ "objc2-app-kit",
  "parallel-projectctl",
  "parallel-workflow-core",
  "rand 0.8.5",

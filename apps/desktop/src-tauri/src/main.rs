@@ -165,6 +165,13 @@ enum DesktopActivationMode {
     MenuBar,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DesktopActivationEffects {
+    mode: DesktopActivationMode,
+    show_app: bool,
+    activate_app: bool,
+}
+
 fn app_support_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path().app_data_dir().map_err(|error| error.to_string())
 }
@@ -2237,21 +2244,59 @@ fn set_desktop_activation_mode(
     app: &AppHandle,
     mode: DesktopActivationMode,
 ) -> Result<(), String> {
+    let effects = desktop_activation_effects(mode);
     #[cfg(target_os = "macos")]
     {
-        let policy = match mode {
+        let policy = match effects.mode {
             DesktopActivationMode::Dashboard => tauri::ActivationPolicy::Regular,
             DesktopActivationMode::MenuBar => tauri::ActivationPolicy::Accessory,
         };
         app.set_activation_policy(policy)
             .map_err(|error| error.to_string())?;
+        if effects.show_app {
+            app.show().map_err(|error| error.to_string())?;
+        }
+        if effects.activate_app {
+            activate_macos_app(app)?;
+        }
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = app;
-        let _ = mode;
+        let _ = effects;
     }
     Ok(())
+}
+
+fn desktop_activation_effects(mode: DesktopActivationMode) -> DesktopActivationEffects {
+    DesktopActivationEffects {
+        mode,
+        show_app: mode == DesktopActivationMode::Dashboard,
+        activate_app: mode == DesktopActivationMode::Dashboard,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn activate_macos_app(app: &AppHandle) -> Result<(), String> {
+    app.run_on_main_thread(|| {
+        use objc2::MainThreadMarker;
+        use objc2_app_kit::{
+            NSApplication, NSApplicationActivationOptions, NSRunningApplication,
+        };
+
+        if let Some(marker) = MainThreadMarker::new() {
+            let app = NSApplication::sharedApplication(marker);
+            #[allow(deprecated)]
+            app.activateIgnoringOtherApps(true);
+            let current_app = NSRunningApplication::currentApplication();
+            #[allow(deprecated)]
+            let _ = current_app.activateWithOptions(
+                NSApplicationActivationOptions::ActivateAllWindows
+                    | NSApplicationActivationOptions::ActivateIgnoringOtherApps,
+            );
+        }
+    })
+    .map_err(|error| error.to_string())
 }
 
 fn activation_mode_for_dashboard_visible(visible: bool) -> DesktopActivationMode {
@@ -2309,10 +2354,6 @@ fn main() {
             } else {
                 let _ = load_state_payload(app.handle(), &state_ref);
             }
-            let launch_args = env::args().collect::<Vec<_>>();
-            if should_open_dashboard_on_launch(&launch_args) {
-                let _ = open_main_window(app.handle());
-            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -2353,6 +2394,10 @@ fn main() {
                 if settings.mcp.enabled {
                     spawn_bridge_start(app.clone());
                 }
+            }
+            let launch_args = env::args().collect::<Vec<_>>();
+            if should_open_dashboard_on_launch(&launch_args) {
+                let _ = open_main_window(app);
             }
         }
         RunEvent::WindowEvent {
@@ -2767,6 +2812,26 @@ mod tests {
         assert_eq!(
             activation_mode_for_dashboard_visible(false),
             DesktopActivationMode::MenuBar
+        );
+    }
+
+    #[test]
+    fn dashboard_activation_shows_app_before_focus() {
+        assert_eq!(
+            desktop_activation_effects(DesktopActivationMode::Dashboard),
+            DesktopActivationEffects {
+                mode: DesktopActivationMode::Dashboard,
+                show_app: true,
+                activate_app: true,
+            }
+        );
+        assert_eq!(
+            desktop_activation_effects(DesktopActivationMode::MenuBar),
+            DesktopActivationEffects {
+                mode: DesktopActivationMode::MenuBar,
+                show_app: false,
+                activate_app: false,
+            }
         );
     }
 

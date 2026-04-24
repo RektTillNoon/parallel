@@ -21,5 +21,9 @@ tauri = { version = "2.0.6", features = ["tray-icon"] }
 tauri-plugin-shell = "2"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSResponder", "NSRunningApplication"] }
+
 [dev-dependencies]
 rusqlite = { version = "0.32.1", features = ["bundled"] }
