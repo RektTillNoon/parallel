@@ -32,6 +32,7 @@ export type CompactActivityEntry = {
 };
 
 const SUMMARY_CHAR_LIMIT = 90;
+const HIDDEN_ACTIVITY_TYPE_PREFIXES = ['session.'];
 
 export function truncateActivitySummary(value: string, limit = SUMMARY_CHAR_LIMIT): string {
   const cleaned = value.replace(/\s+/g, ' ').trim();
@@ -45,8 +46,12 @@ export function truncateActivitySummary(value: string, limit = SUMMARY_CHAR_LIMI
 }
 
 export function compactActivityEntries(entries: ActivityEvent[], limit = 8) {
+  const displayEntries = entries.filter((entry) =>
+    HIDDEN_ACTIVITY_TYPE_PREFIXES.every((prefix) => !entry.type.startsWith(prefix)),
+  );
+
   return {
-    entries: entries.slice(0, limit).map((entry) => {
+    entries: displayEntries.slice(0, limit).map((entry) => {
       const payload = entry.payload && typeof entry.payload === 'object' ? entry.payload : {};
       const blockers = 'blockers' in payload ? payload.blockers : null;
       const payloadBlockers = Array.isArray(blockers)
@@ -65,6 +70,6 @@ export function compactActivityEntries(entries: ActivityEvent[], limit = 8) {
         blockers: payloadBlockers,
       };
     }),
-    hiddenCount: Math.max(0, entries.length - limit),
+    hiddenCount: Math.max(0, displayEntries.length - limit),
   };
 }

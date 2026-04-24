@@ -72,6 +72,25 @@ describe('compactActivityEntries', () => {
     expect(compact.hiddenCount).toBe(2);
   });
 
+  it('omits session lifecycle events from the display timeline before limiting entries', () => {
+    const compact = compactActivityEntries(
+      [
+        {
+          ...activity('Ensured session "Validate Parallel plugin usage"', '2026-04-16T19:59:00Z'),
+          type: 'session.ensured',
+        },
+        activity('Validated the Parallel plugin guidance', '2026-04-16T19:58:00Z'),
+      ],
+      1,
+    );
+
+    expect(compact.entries.map((entry) => entry.summary)).toEqual([
+      'Validated the Parallel plugin guidance',
+    ]);
+    expect(compact.entries.map((entry) => entry.type)).toEqual(['note']);
+    expect(compact.hiddenCount).toBe(0);
+  });
+
   it('adds compact relative timestamps for feed rendering', () => {
     const compact = compactActivityEntries([
       {
